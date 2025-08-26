@@ -28,14 +28,22 @@ function hashPrompt(s: string) {
   return crypto.createHash("sha256").update(s).digest("hex");
 }
 
-// NOTE: make model a definite string
+// Require env var and return a definite string
+function requiredEnv(name: string): string {
+  const v = process.env[name];
+  if (!v || !v.trim()) throw new Error(`Missing required env var: ${name}`);
+  return v.trim();
+}
+
 export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
-  const model = modelOverride ?? process.env.OPENAI_MODEL; // <= always a string
+  // No hard-coded default; must come from env or caller
+  const model: string = (modelOverride?.trim()) || requiredEnv("OPENAI_MODEL");
+
   const outputs: LlmOutput[] = [];
 
   for (const input of inputs) {
     const prompt = promptFor(input);
-    const key = hashPrompt(model + "::" + prompt);
+    const key = hashPrompt(`${model}::${prompt}`);
 
     const cached = await prisma.llmCache.findUnique({ where: { promptKey: key } });
     if (cached) {
@@ -51,7 +59,7 @@ export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
     }
 
     const resp = await client.chat.completions.create({
-      model, // <= now definitely a string
+      model,
       messages: [
         { role: "system", content: "Return strict JSON only." },
         { role: "user", content: prompt },
@@ -69,7 +77,7 @@ export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
         result: content,
         tokensIn: usage.prompt_tokens ?? undefined,
         tokensOut: usage.completion_tokens ?? undefined,
-        model, // store the actual model string we used
+        model, // safe: this is from env or explicit override
       },
     });
 
