@@ -1,0 +1,23 @@
+# Local Netlify folder
+.netlify
+# Node/Next/Netlify
+node_modules/
+.next/
+out/
+dist/
+.netlify/
+.vercel/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Logs & caches
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+.cache/
+coverage/
+.DS_Store

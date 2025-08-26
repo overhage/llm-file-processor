@@ -1,0 +1,20 @@
+{
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.14.0",
+    "csv-parse": "^5.5.0",
+    "csv-stringify": "^6.5.0",
+    "next": "^14.2.5",
+    "openai": "^4.55.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/react": "19.1.11",
+    "prisma": "^6.14.0",
+    "typescript": "^5.5.3"
+  }
+}

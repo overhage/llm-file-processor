@@ -1,0 +1,14 @@
+[build]
+  command = "pnpm build"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  external_node_modules = ["@prisma/client"]
+  included_files = ["prisma/schema.prisma"]
+
+# Run cleanup daily at 03:00 UTC
+[functions."cleanup"]
+  schedule = "0 3 * * *"
+
+

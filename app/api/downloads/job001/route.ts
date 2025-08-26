@@ -1,0 +1,20 @@
+// =============================================
+// API route — secure download proxy
+// =============================================
+// GET /api/downloads/:jobId → streams the processed CSV from Blobs
+// --- file: app/api/downloads/[jobId]/route.ts ---
+import { prisma } from "@/lib/db";
+import { getStore } from "@netlify/blobs";
+
+export async function GET(_req: Request, { params }: { params: { jobId: string } }) {
+  // TODO: check auth/roles — only owner or manager can access
+  const job = await prisma.job.findUnique({ where: { id: params.jobId } });
+  if (!job?.outputBlobKey) return new Response("Not ready", { status: 404 });
+
+  const outputs = getStore(process.env.BLOB_STORE_OUTPUTS ?? "outputs");
+  // Tip: the Blobs API supports streaming reads in modern runtimes; if not available, this returns full content.
+  const stream = (await outputs.get(job.outputBlobKey, { type: "stream" } as any)) as unknown as ReadableStream | null;
+
+  if (!stream) return new Response("Missing output", { status: 404 });
+  return new Response(stream, { headers: { "content-type": "text/csv", "content-disposition": `attachment; filename="${params.jobId}.csv"` } });
+}

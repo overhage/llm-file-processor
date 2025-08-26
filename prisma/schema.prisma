@@ -1,0 +1,113 @@
+// =============================================
+// Prisma schema (minimal)
+// =============================================
+// --- file: prisma/schema.prisma ---
+// Choose your provider. Neon/Supabase use "postgresql".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum JobStatus {
+  queued
+  running
+  completed
+  failed
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  role      String // "user" | "manager"
+  uploads   Upload[]
+  jobs      Job[]
+  createdAt DateTime @default(now())
+}
+
+model Upload {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  blobKey      String // key in Netlify Blobs store (e.g., "uploads/{userId}/{uuid}.csv")
+  originalName String
+  createdAt    DateTime @default(now())
+  jobs         Job[]
+}
+
+model Job {
+  id            String    @id @default(cuid())
+  uploadId      String
+  upload        Upload    @relation(fields: [uploadId], references: [id])
+  status        JobStatus @default(queued)
+  error         String?
+  rowsTotal     Int?
+  rowsProcessed Int?
+  outputBlobKey String?
+  tokensIn      Int?
+  tokensOut     Int?
+  costCents     Int?
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  User          User?     @relation(fields: [userId], references: [id])
+  userId        String?
+}
+
+// Domain table: your master list + LLM enrichment
+model MasterRecord {
+  // Pair ID is the unique identifier for a particular pair of concepts
+  pairId String @id
+
+  // --- Concept & Code fields ---
+  conceptA String @db.VarChar(255) // should be >= 100 chars (validate in app)
+  codeA    String @db.VarChar(20)
+  conceptB String @db.VarChar(255) // should be >= 100 chars (validate in app)
+  codeB    String @db.VarChar(20)
+
+  systemA String @db.VarChar(12)
+  systemB String @db.VarChar(12)
+
+  typeA String @db.VarChar(20)
+  typeB String @db.VarChar(20)
+
+  countsAB Int
+  lift     Float?
+
+  relationshipType String @db.VarChar(12)
+  relationshipCode Int
+
+  rational String @db.VarChar(255) // explanation for the relationship
+
+  llmDate    DateTime?
+  llmName    String?   @db.VarChar(100)
+  llmVersion String?   @db.VarChar(50)
+
+  humanDate          DateTime?
+  humanReviewer      String?   @db.VarChar(254)
+  humanReviewComment String?   @db.VarChar(255)
+
+  sourceCount Int @default(0)
+  status      Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([codeA, systemA])
+  @@index([codeB, systemB])
+}
+
+// Optional de-dup cache to avoid identical LLM calls
+model LlmCache {
+  id        String   @id @default(cuid())
+  promptKey String   @unique // hash of prompt template + input
+  result    String // JSON/text result
+  tokensIn  Int?
+  tokensOut Int?
+  model     String?
+  createdAt DateTime @default(now())
+}
