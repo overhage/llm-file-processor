@@ -31,7 +31,7 @@ function hashPrompt(s: string) {
   return crypto.createHash("sha256").update(s).digest("hex");
 }
 
-export async function runLlmBatch(inputs: LlmInput[], model = process.env.OPENAI_MODEL ?? "gpt-4o-mini") {
+export async function runLlmBatch(inputs: LlmInput[], model = process.env.OPENAI_MODEL) {
   const outputs: LlmOutput[] = [];
 
   for (const input of inputs) {
