@@ -125,7 +125,7 @@ export default async (req: Request, _context: Context) => {
 
     const csvOut = toCsv(finalRows);
 
-    const outputs = getStore(process.env.BLOB_STORE_OUTPUTS ?? "outputs");
+    const outputs = getStore(process.env.BLOB_STORE_OUTPUTS);
     const outKey = `${userId}/${jobId}.csv`;
     await outputs.set(outKey, csvOut, { metadata: { originalName, jobId } });
 
