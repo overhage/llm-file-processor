@@ -1,8 +1,3 @@
-// =============================================
-// API route — secure download proxy
-// =============================================
-// GET /api/downloads/:jobId → streams the processed CSV from Blobs
-// --- file: app/api/downloads/[jobId]/route.ts ---
 import { prisma } from "@/lib/db";
 import { getStore } from "@netlify/blobs";
 

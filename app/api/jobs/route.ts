@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/db";
+import { getStore } from "@netlify/blobs";
+
 import type { CreateJobBody } from "@/lib/types";
 
 export async function POST(req: Request) {
