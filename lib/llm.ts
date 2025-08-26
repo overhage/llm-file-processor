@@ -30,7 +30,7 @@ function hashPrompt(s: string) {
 
 // NOTE: make model a definite string
 export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
-  const model = modelOverride ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini"; // <= always a string
+  const model = modelOverride ?? process.env.OPENAI_MODEL; // <= always a string
   const outputs: LlmOutput[] = [];
 
   for (const input of inputs) {
