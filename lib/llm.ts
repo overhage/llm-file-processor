@@ -1,7 +1,4 @@
-// =============================================
-// lib/llm.ts — OpenAI client + batching helper
-// =============================================
-// --- file: lib/llm.ts ---
+// lib/llm.ts
 import OpenAI from "openai";
 import crypto from "node:crypto";
 import { prisma } from "./db";
@@ -31,7 +28,9 @@ function hashPrompt(s: string) {
   return crypto.createHash("sha256").update(s).digest("hex");
 }
 
-export async function runLlmBatch(inputs: LlmInput[], model = process.env.OPENAI_MODEL) {
+// NOTE: make model a definite string
+export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
+  const model = modelOverride ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini"; // <= always a string
   const outputs: LlmOutput[] = [];
 
   for (const input of inputs) {
@@ -42,19 +41,23 @@ export async function runLlmBatch(inputs: LlmInput[], model = process.env.OPENAI
     if (cached) {
       try {
         const cachedJson = JSON.parse(cached.result);
-        outputs.push({ pairId: input.pairId, ...cachedJson, usage: { promptTokens: cached.tokensIn ?? 0, completionTokens: cached.tokensOut ?? 0 } });
+        outputs.push({
+          pairId: input.pairId,
+          ...cachedJson,
+          usage: { promptTokens: cached.tokensIn ?? 0, completionTokens: cached.tokensOut ?? 0 },
+        });
         continue;
       } catch {}
     }
 
     const resp = await client.chat.completions.create({
-      model,
+      model, // <= now definitely a string
       messages: [
         { role: "system", content: "Return strict JSON only." },
-        { role: "user", content: prompt }
+        { role: "user", content: prompt },
       ],
       temperature: 0.2,
-      response_format: { type: "json_object" }
+      response_format: { type: "json_object" },
     });
 
     const content = resp.choices[0]?.message?.content ?? "{}";
@@ -66,8 +69,8 @@ export async function runLlmBatch(inputs: LlmInput[], model = process.env.OPENAI
         result: content,
         tokensIn: usage.prompt_tokens ?? undefined,
         tokensOut: usage.completion_tokens ?? undefined,
-        model
-      }
+        model, // store the actual model string we used
+      },
     });
 
     const parsed = JSON.parse(content);
@@ -76,10 +79,9 @@ export async function runLlmBatch(inputs: LlmInput[], model = process.env.OPENAI
       rational: parsed.rational ?? "",
       relationshipType: parsed.relationshipType ?? undefined,
       relationshipCode: parsed.relationshipCode ?? undefined,
-      usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens }
+      usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens },
     });
   }
 
   return outputs;
 }
-
