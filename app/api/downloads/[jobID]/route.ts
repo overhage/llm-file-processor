@@ -1,19 +1,32 @@
-import { prisma } from "@/lib/db";
-import { requiredEnv } from "@/lib/env";
-import { getStore } from "@netlify/blobs";
+import { prisma } from '@/lib/db';
+import { getStore } from '@netlify/blobs';
 
-export async function GET(_req: Request, { params }: { params: { jobId: string } }) {
-  // TODO: check auth/roles — only owner or manager can access
-  const job = await prisma.job.findUnique({ where: { id: params.jobId } });
-  if (!job?.outputBlobKey) return new Response("Not ready", { status: 404 });
+const OUTPUTS_STORE = 'outputs';
 
-const OUTPUTS_STORE = "outputs";
-const outputs = getStore(OUTPUTS_STORE);
+export async function GET(
+  _req: Request,
+  { params }: { params: { jobId: string } }
+) {
+  const jobId = params.jobId;
+  const job = await prisma.job.findUnique({ where: { id: jobId } });
+  if (!job || !job.outputBlobKey) {
+    return new Response('Not ready', { status: 404 });
+  }
 
+  const outputs = getStore(OUTPUTS_STORE);
+  const data = await outputs.get(job.outputBlobKey);
+  if (data == null) {
+    return new Response('Output missing', { status: 404 });
+  }
 
-  // Tip: the Blobs API supports streaming reads in modern runtimes; if not available, this returns full content.
-  const stream = (await outputs.get(job.outputBlobKey, { type: "stream" } as any)) as unknown as ReadableStream | null;
+  // outputs.get() returns a string or Uint8Array depending on what was stored
+  const body = typeof data === 'string' ? data : Buffer.from(data);
+  const filename = `job-${jobId}.csv`;
 
-  if (!stream) return new Response("Missing output", { status: 404 });
-  return new Response(stream, { headers: { "content-type": "text/csv", "content-disposition": `attachment; filename="${params.jobId}.csv"` } });
+  return new Response(body, {
+    headers: {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="${filename}"`
+    }
+  });
 }
