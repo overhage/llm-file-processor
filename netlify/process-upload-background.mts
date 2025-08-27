@@ -15,6 +15,7 @@ import { getStore } from "@netlify/blobs";
 import { prisma } from "../../lib/db";
 import { parseCsvText, toCsv } from "../../lib/csv";
 import { runLlmBatch } from "../../lib/llm";
+import { requiredEnv } from "../../lib/env";
 
 function computePairId(row: Record<string, any>) {
   if (row.pairId || row.PAIR_ID || row["Pair ID"]) return String(row.pairId ?? row.PAIR_ID ?? row["Pair ID"]).trim();
@@ -38,7 +39,7 @@ export default async (req: Request, _context: Context) => {
 
     await prisma.job.update({ where: { id: jobId }, data: { status: "running", startedAt: new Date() } });
 
-    const uploads = getStore(process.env.BLOB_STORE_UPLOADS ?? "uploads");
+    const uploads = getStore(requiredEnv("BLOB_STORE_UPLOADS"));
     const csvText = await uploads.get(uploadBlobKey);
     if (csvText == null) throw new Error("Upload not found in Blobs");
 
@@ -83,24 +84,18 @@ export default async (req: Request, _context: Context) => {
     }
 
     const BATCH = Number(process.env.LLM_BATCH ?? 20);
+    const MODEL = requiredEnv("OPENAI_MODEL");
     let tokensIn = 0, tokensOut = 0;
 
     for (let i = 0; i < inputs.length; i += BATCH) {
       const slice = inputs.slice(i, i + BATCH);
-      const out = await runLlmBatch(slice);
+      const out = await runLlmBatch(slice, MODEL);
 
       for (const o of out) {
         await prisma.masterRecord.update({
-          where: { pairId: o.pairId },
-          data: {
-            rational: o.rational,
-            relationshipType: o.relationshipType ?? undefined,
-            relationshipCode: o.relationshipCode ?? undefined,
-            llmDate: new Date(),
-            llmName: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
-            llmVersion: process.env.OPENAI_MODEL ?? "gpt-4o-mini"
-          }
-        });
+  	// ...
+  	data: { /* ... */, llmDate: new Date(), llmName: MODEL, llmVersion: MODEL },
+	});
         tokensIn += o.usage?.promptTokens ?? 0;
         tokensOut += o.usage?.completionTokens ?? 0;
       }

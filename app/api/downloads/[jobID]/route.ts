@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { requiredEnv } from "@/lib/env";
 import { getStore } from "@netlify/blobs";
 
 export async function GET(_req: Request, { params }: { params: { jobId: string } }) {
@@ -6,7 +7,7 @@ export async function GET(_req: Request, { params }: { params: { jobId: string }
   const job = await prisma.job.findUnique({ where: { id: params.jobId } });
   if (!job?.outputBlobKey) return new Response("Not ready", { status: 404 });
 
-  const outputs = getStore(process.env.BLOB_STORE_OUTPUTS ?? "outputs");
+  const outputs = getStore(requiredEnv("BLOB_STORE_OUTPUTS"));
   // Tip: the Blobs API supports streaming reads in modern runtimes; if not available, this returns full content.
   const stream = (await outputs.get(job.outputBlobKey, { type: "stream" } as any)) as unknown as ReadableStream | null;
 

@@ -2,6 +2,7 @@
 import OpenAI from "openai";
 import crypto from "node:crypto";
 import { prisma } from "./db";
+import { requiredEnv } from "./env";
 
 type LlmInput = { pairId: string; conceptA?: string; conceptB?: string; typeA?: string; typeB?: string };
 
@@ -13,7 +14,7 @@ type LlmOutput = {
   usage?: { promptTokens?: number; completionTokens?: number };
 };
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const client = new OpenAI({ apiKey: requiredEnv("OPENAI_API_KEY") }
 
 function promptFor(input: LlmInput) {
   return `Given two clinical concepts, propose the relationship type and a concise rationale.
@@ -36,8 +37,7 @@ function requiredEnv(name: string): string {
 }
 
 export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
-  // No hard-coded default; must come from env or caller
-  const model: string = (modelOverride?.trim()) || requiredEnv("OPENAI_MODEL");
+  const model = modelOverride?.trim() || requiredEnv("OPENAI_MODEL");  // <-- from env only
 
   const outputs: LlmOutput[] = [];
 
