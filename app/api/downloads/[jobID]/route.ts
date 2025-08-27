@@ -2,7 +2,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-
 import { prisma } from '@/lib/db';
 import { getStore } from '@netlify/blobs';
 
@@ -13,25 +12,29 @@ export async function GET(
   { params }: { params: { jobId: string } }
 ) {
   const jobId = params.jobId;
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
-  if (!job || !job.outputBlobKey) {
+
+  // 1) Look up the output key that the worker wrote
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    select: { outputBlobKey: true },
+  });
+  if (!job?.outputBlobKey) {
     return new Response('Not ready', { status: 404 });
   }
 
+  // 2) Read from the outputs store
   const outputs = getStore(OUTPUTS_STORE);
-  const data = await outputs.get(job.outputBlobKey);
+  const data = await outputs.get(job.outputBlobKey); // string | Uint8Array | null
   if (data == null) {
     return new Response('Output missing', { status: 404 });
   }
 
-  // outputs.get() returns a string or Uint8Array depending on what was stored
-  const body = typeof data === 'string' ? data : Buffer.from(data);
-  const filename = `job-${jobId}.csv`;
-
+  // 3) Return CSV with download headers (Uint8Array or string are both fine)
+  const body = typeof data === 'string' ? data : data; // Response accepts Uint8Array
   return new Response(body, {
     headers: {
       'content-type': 'text/csv; charset=utf-8',
-      'content-disposition': `attachment; filename="${filename}"`
-    }
+      'content-disposition': `attachment; filename="job-${jobId}.csv"`,
+    },
   });
 }
