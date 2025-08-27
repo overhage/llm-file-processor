@@ -82,7 +82,7 @@ export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
       rational: parsed.rational ?? "",
       relationshipType: parsed.relationshipType ?? undefined,
       relationshipCode: parsed.relationshipCode ?? undefined,
-      usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completions_tokens },
+      usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens },
     });
   }
 
