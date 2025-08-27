@@ -1,4 +1,3 @@
-// app/api/downloads/[jobId]/route.ts
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -8,18 +7,20 @@ import { prisma } from '@/lib/db';
 
 const OUTPUTS_STORE = 'outputs';
 
+// Minimal shape we need from blobs.list()
+type BlobListPage = { blobs: { key: string }[] };
+
 export async function GET(
   _req: Request,
-  // tolerate either [jobId] or [jobID] folder names
   { params }: { params: Record<string, string> }
 ) {
-  const jobId = params.jobId ?? params.jobID;
+  const jobId = params.jobId ?? params.jobID; // tolerate old folder name
   if (!jobId) return new Response('Missing jobId', { status: 400 });
 
   const outputs = getStore(OUTPUTS_STORE);
   let outputBlobKey: string | null = null;
 
-  // 1) Preferred: read the key from DB
+  // 1) Prefer DB lookup
   try {
     const job = await prisma.job.findUnique({
       where: { id: jobId },
@@ -27,34 +28,30 @@ export async function GET(
     });
     outputBlobKey = job?.outputBlobKey ?? null;
   } catch (e) {
-    console.error('Download: Prisma lookup failed; will try blob scan', e);
+    console.error('Download: Prisma lookup failed; falling back to blobs list()', e);
   }
 
-  // 2) Fallback: scan outputs store with pagination
+  // 2) Fallback: scan blobs via async iterator (typed with our minimal shape)
   if (!outputBlobKey) {
     try {
-      let cursor: string | undefined = undefined;
-      do {
-        const page = await outputs.list({ cursor });
+      const iterable = outputs.list({ paginate: true }) as unknown as AsyncIterable<BlobListPage>;
+      for await (const page of iterable) {
         const match = page.blobs.find(
-          (b) => b.key === `${jobId}.csv` || b.key.endsWith(`/${jobId}.csv`)
+          b => b.key === `${jobId}.csv` || b.key.endsWith(`/${jobId}.csv`)
         );
         if (match) {
           outputBlobKey = match.key;
           break;
         }
-        cursor = page.cursor;
-      } while (cursor);
+      }
     } catch (e) {
-      console.error('Download: blob list failed', e);
+      console.error('Download: list() failed', e);
     }
   }
 
-  if (!outputBlobKey) {
-    return new Response('Not ready', { status: 404 });
-  }
+  if (!outputBlobKey) return new Response('Not ready', { status: 404 });
 
-  // 3) Fetch the CSV and return it
+  // 3) Return CSV
   const data = await outputs.get(outputBlobKey); // string | Uint8Array | null
   if (data == null) return new Response('Output missing', { status: 404 });
 
