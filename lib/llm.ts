@@ -14,7 +14,8 @@ type LlmOutput = {
   usage?: { promptTokens?: number; completionTokens?: number };
 };
 
-const client = new OpenAI({ apiKey: requiredEnv("OPENAI_API_KEY") }
+// ✅ Ensure the object literal is closed with "});"
+const client = new OpenAI({ apiKey: requiredEnv("OPENAI_API_KEY") });
 
 function promptFor(input: LlmInput) {
   return `Given two clinical concepts, propose the relationship type and a concise rationale.
@@ -29,15 +30,9 @@ function hashPrompt(s: string) {
   return crypto.createHash("sha256").update(s).digest("hex");
 }
 
-// Require env var and return a definite string
-function requiredEnv(name: string): string {
-  const v = process.env[name];
-  if (!v || !v.trim()) throw new Error(`Missing required env var: ${name}`);
-  return v.trim();
-}
-
 export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
-  const model = modelOverride?.trim() || requiredEnv("OPENAI_MODEL");  // <-- from env only
+  // No hard-coded model string; must come from env or caller
+  const model: string = modelOverride?.trim() || requiredEnv("OPENAI_MODEL");
 
   const outputs: LlmOutput[] = [];
 
@@ -77,7 +72,7 @@ export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
         result: content,
         tokensIn: usage.prompt_tokens ?? undefined,
         tokensOut: usage.completion_tokens ?? undefined,
-        model, // safe: this is from env or explicit override
+        model,
       },
     });
 
@@ -87,7 +82,7 @@ export async function runLlmBatch(inputs: LlmInput[], modelOverride?: string) {
       rational: parsed.rational ?? "",
       relationshipType: parsed.relationshipType ?? undefined,
       relationshipCode: parsed.relationshipCode ?? undefined,
-      usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens },
+      usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completions_tokens },
     });
   }
 
