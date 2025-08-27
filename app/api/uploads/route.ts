@@ -23,7 +23,7 @@ export async function POST(req: Request) {
     // 1) Save to Blobs (uploads store)
     const uploads = getStore(UPLOADS_STORE);
     const uploadBlobKey = `${userId}/${jobId}.csv`;
-    await uploads.set(uploadBlobKey, Buffer.from(arrayBuf), {
+    await uploads.set(uploadBlobKey, arrayBuf, {
       contentType: file.type || 'text/csv',
       metadata: { originalName, userId, jobId }
     });
