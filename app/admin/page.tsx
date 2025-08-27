@@ -2,49 +2,38 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { Prisma, JobStatus } from '@prisma/client'; // <-- add this
+import { Prisma, JobStatus } from '@prisma/client';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
-function fmt(d?: Date | null) {
-  return d ? new Date(d).toLocaleString() : '';
-}
+function fmt(d?: Date | null) { return d ? new Date(d).toLocaleString() : ''; }
 
-export default async function AdminPage({
-  searchParams,
-}: {
-  searchParams?: { status?: string };
-}) {
+export default async function AdminPage({ searchParams }: { searchParams?: { status?: string } }) {
+  const session = await auth();
+  const role = (session?.user as any)?.role ?? 'user';
+  if (!session || role !== 'manager') redirect('/login');
+
   const statusRaw = (searchParams?.status ?? '').toLowerCase();
-
-  // validate and build a typed where clause
   const allowed: JobStatus[] = ['queued', 'running', 'completed', 'failed'];
   const where: Prisma.JobWhereInput =
-    allowed.includes(statusRaw as JobStatus)
-      ? { status: statusRaw as JobStatus }
-      : {}; // empty filter when invalid/missing
+    allowed.includes(statusRaw as JobStatus) ? { status: statusRaw as JobStatus } : {};
 
   const jobs = await prisma.job.findMany({
-    where, // <-- now correctly typed
+    where,
     orderBy: [{ createdAt: 'desc' }],
     take: 200,
     select: {
-      id: true,
-      status: true,
-      error: true,
-      rowsTotal: true,
-      rowsProcessed: true,
-      tokensIn: true,
-      tokensOut: true,
-      costCents: true,
-      createdAt: true,
-      startedAt: true,
-      finishedAt: true,
-      userId: true,
-      outputBlobKey: true,
+      id: true, status: true, error: true,
+      rowsTotal: true, rowsProcessed: true,
+      tokensIn: true, tokensOut: true, costCents: true,
+      createdAt: true, startedAt: true, finishedAt: true,
+      userId: true, outputBlobKey: true,
       upload: { select: { id: true, originalName: true, blobKey: true } },
     },
   });
+
 
   return (
     <main style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
