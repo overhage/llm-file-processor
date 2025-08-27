@@ -16,6 +16,7 @@ import { prisma } from "../../lib/db";
 import { parseCsvText, toCsv } from "../../lib/csv";
 import { runLlmBatch } from "../../lib/llm";
 import { requiredEnv } from "../../lib/env";
+import { getStore } from "@netlify/blobs";
 
 function computePairId(row: Record<string, any>) {
   if (row.pairId || row.PAIR_ID || row["Pair ID"]) return String(row.pairId ?? row.PAIR_ID ?? row["Pair ID"]).trim();
@@ -39,7 +40,11 @@ export default async (req: Request, _context: Context) => {
 
     await prisma.job.update({ where: { id: jobId }, data: { status: "running", startedAt: new Date() } });
 
-    const uploads = getStore(requiredEnv("BLOB_STORE_UPLOADS"));
+    const UPLOADS_STORE = "uploads";
+    const OUTPUTS_STORE = "outputs";
+    const uploads = getStore(UPLOADS_STORE);
+
+
     const csvText = await uploads.get(uploadBlobKey);
     if (csvText == null) throw new Error("Upload not found in Blobs");
 
@@ -120,7 +125,7 @@ export default async (req: Request, _context: Context) => {
 
     const csvOut = toCsv(finalRows);
 
-    const outputs = getStore(process.env.BLOB_STORE_OUTPUTS);
+    const outputs = getStore(OUTPUTS_STORE);
     const outKey = `${userId}/${jobId}.csv`;
     await outputs.set(outKey, csvOut, { metadata: { originalName, jobId } });
 
