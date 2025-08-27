@@ -1,3 +1,7 @@
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 import { prisma } from '@/lib/db';
 import { getStore } from '@netlify/blobs';
 import crypto from 'node:crypto';
@@ -23,9 +27,8 @@ export async function POST(req: Request) {
     // 1) Save to Blobs (uploads store)
     const uploads = getStore(UPLOADS_STORE);
     const uploadBlobKey = `${userId}/${jobId}.csv`;
-    await uploads.set(uploadBlobKey, arrayBuf, {
-      contentType: file.type || 'text/csv',
-      metadata: { originalName, userId, jobId }
+    await uploads.set(uploadBlobKey, file, {
+      metadata: { originalName, userId, jobId },
     });
 
     // 2) Create Job row (status queued)
@@ -33,6 +36,7 @@ export async function POST(req: Request) {
       data: {
         id: jobId,
         userId,
+        uploadId: uploadBlobKey, 
         status: 'queued',
         rowsTotal: 0,
         rowsProcessed: 0
