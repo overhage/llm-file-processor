@@ -10,7 +10,7 @@ export async function GET(_req: Request, { params }: { params: { jobId: string }
 const OUTPUTS_STORE = "outputs";
 const outputs = getStore(OUTPUTS_STORE);
 
-  const outputs = getStore(requiredEnv("BLOB_STORE_OUTPUTS"));
+
   // Tip: the Blobs API supports streaming reads in modern runtimes; if not available, this returns full content.
   const stream = (await outputs.get(job.outputBlobKey, { type: "stream" } as any)) as unknown as ReadableStream | null;
 
