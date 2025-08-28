@@ -15,7 +15,7 @@ export default async function UploadPage() {
     <main style={{ padding: 24, maxWidth: 800, margin: "0 auto" }}>
       <SiteNav current="upload" />
       <h1>Upload CSV</h1>
-      <form method="post" action="/api/uploads" encType="multipart/form-data">
+      <form method="post" action="/api/uploads?redirect=/jobs" encType="multipart/form-data">
         <input type="file" name="file" accept=".csv,.xlsx" required />
         <div style={{ height: 8 }} />
         <button type="submit">Upload</button>
