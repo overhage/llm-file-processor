@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import SiteNav from "@/components/SiteNav";
+import AutoRefresh from "@/components/AutoRefresh";
 
 function fmt(d?: Date | null) {
   return d ? new Date(d).toLocaleString() : "";
@@ -43,7 +44,8 @@ export default async function JobsPage() {
   return (
     <main style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <SiteNav current="jobs" />
-      <h1>Your Jobs</h1>
+      <h1>Your Uploads</h1>
+      <AutoRefresh intervalSec={10} enabledByDefault={true} />
       <p style={{ marginBottom: 12 }}>
         Signed in as <strong>{me.name ?? me.email}</strong>
       </p>
