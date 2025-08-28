@@ -1,57 +1,25 @@
-'use client';
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-import { useState } from 'react';
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { redirect } from "next/navigation";
+import SiteNav from "@/components/SiteNav";
 
-export default function UploadPage() {
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    setJobId(null);
-
-    const fd = new FormData(e.currentTarget);
-    const res = await fetch('/api/uploads', {
-      method: 'POST',
-      body: fd
-    });
-
-    if (!res.ok) {
-      const t = await res.text();
-      setError(t || `Upload failed with ${res.status}`);
-    } else {
-      const j = await res.json();
-      setJobId(j.jobId);
-    }
-
-    setBusy(false);
-  }
+export default async function UploadPage() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.email) redirect("/login");
 
   return (
-    <main style={{ padding: 24 }}>
-      <h1>Upload a CSV</h1>
-      <form onSubmit={onSubmit}>
-        <input type="file" name="file" accept=".csv,text/csv" required />
-        <button type="submit" disabled={busy} style={{ marginLeft: 12 }}>
-          {busy ? 'Uploading…' : 'Upload'}
-        </button>
+    <main style={{ padding: 24, maxWidth: 800, margin: "0 auto" }}>
+      <SiteNav current="upload" />
+      <h1>Upload CSV</h1>
+      <form method="post" action="/api/uploads" encType="multipart/form-data">
+        <input type="file" name="file" accept=".csv,.xlsx" required />
+        <div style={{ height: 8 }} />
+        <button type="submit">Upload</button>
       </form>
-
-      {jobId && (
-        <p style={{ marginTop: 16 }}>
-          Job created: <code>{jobId}</code>. Check <a href="/jobs">Jobs</a> to view status.
-        </p>
-      )}
-      {error && <p style={{ color: 'crimson', marginTop: 16 }}>{error}</p>}
-
-      <hr style={{ margin: '24px 0' }} />
-      <p>Sample CSV headers your worker expects:</p>
-      <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>
-        "Concept A","Code A","System A","Type A","Concept B","Code B","System B","Type B","counts_AB","Lift","Relationship Type","Relationship Code","Rational","Source Count","Status","Pair ID"
-      </pre>
     </main>
   );
 }

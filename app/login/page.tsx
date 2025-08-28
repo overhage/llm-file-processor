@@ -6,7 +6,9 @@ export default function LoginPage() {
   return (
     <main style={{ padding: 24 }}>
       <h1>Sign in</h1>
-      <button onClick={() => signIn("github")}>Sign in with GitHub</button>
+      <button onClick={() => signIn("github", { callbackUrl: "/jobs" })}>
+        Sign in with GitHub
+      </button>
     </main>
   );
 }
