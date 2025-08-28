@@ -5,6 +5,88 @@ import { runLlmBatch } from "../../lib/llm.js";
 import { parse } from "csv-parse/sync";
 import { stringify } from "csv-stringify/sync";
 import { z } from "zod";
+// netlify/functions/process-upload-background.mts
+import { getStore } from '@netlify/blobs';
+import { prisma } from '@/lib/db';
+
+// optional: if you use scheduled cleanup elsewhere, keep it separate
+// export const config = { schedule: '0 3 * * *' };
+
+export default async (req: Request) => {
+  // ---- parse & validate input --------------------------------------------
+  const { jobId, userId, uploadBlobKey, originalName } = await req.json().catch(() => ({} as any));
+  if (!jobId || !userId || !uploadBlobKey) {
+    return new Response('Missing jobId/userId/uploadBlobKey', { status: 400 });
+  }
+
+  // ---- CLAIM: atomically move queued -> running (idempotency guard) -------
+  const claimed = await prisma.job.updateMany({
+    where: { id: jobId, status: 'queued' },
+    data: { status: 'running', startedAt: new Date(), error: null },
+  });
+
+  // If 0, someone else already claimed or job is not in 'queued' anymore.
+  if (claimed.count === 0) {
+    // Avoid double-processing. Treat as accepted but no-op.
+    return new Response(JSON.stringify({ ok: true, note: 'job not claimed (already running/done)' }), { status: 202 });
+  }
+
+  // ---- PROCESS ------------------------------------------------------------
+  try {
+    const uploads = getStore('uploads');
+    const outputs = getStore('outputs');
+
+    // 1) Read the uploaded file
+    const inBuf = await uploads.get(uploadBlobKey);
+    if (inBuf == null) throw new Error(`Upload not found: ${uploadBlobKey}`);
+
+    // 2) … do the work …
+    //    - parse CSV
+    //    - join with MasterRecord
+    //    - runLlmBatch() for missing fields (respect caching)
+    //    - create merged CSV string `outCsv`
+    //    - compute metrics (rowsTotal, rowsProcessed, tokensIn/out, costCents)
+    const outCsv = typeof inBuf === 'string' ? inBuf : new TextDecoder().decode(inBuf);
+    const rowsTotal = outCsv ? outCsv.split(/\r?\n/).filter(Boolean).length - 1 : 0; // example
+    const rowsProcessed = rowsTotal; // example
+    const tokensIn = 0, tokensOut = 0, costCents = 0; // set from your LLM usage if used
+
+    // 3) Write output
+    const outputBlobKey = `${userId}/${jobId}.csv`;
+    await outputs.set(outputBlobKey, outCsv, {
+      metadata: { jobId, userId, source: uploadBlobKey, originalName },
+    });
+
+    // 4) Mark completed
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: 'completed',
+        outputBlobKey,
+        finishedAt: new Date(),
+        rowsTotal,
+        rowsProcessed,
+        tokensIn,
+        tokensOut,
+        costCents,
+      },
+    });
+
+    return new Response(JSON.stringify({ ok: true, jobId, outputBlobKey }), { status: 200 });
+  } catch (err: any) {
+    // ---- RETRY/FAIL: persist error, leave rowsProcessed as-is -------------
+    const message = String(err?.message ?? err).slice(0, 500);
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: 'failed',
+        error: message,
+        finishedAt: new Date(),
+      },
+    });
+    return new Response(JSON.stringify({ ok: false, error: message }), { status: 500 });
+  }
+};
 
 const UPLOADS = "uploads";
 const OUTPUTS = "outputs";
@@ -225,8 +307,8 @@ export default async function handler(req: Request) {
       where: { id: jobId },
       data: {
         status: "completed",
+	outputBlobKey,
         finishedAt: new Date(),
-        outputBlobKey,
         rowsTotal: valid.length,
         rowsProcessed: valid.length,
         tokensIn: totalIn || null,
