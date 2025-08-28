@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 import type { Metadata } from "next";
-import LoginButton from "../../components/LoginButton";
+import LoginButton from "components/LoginButton";
 
 export const metadata: Metadata = {
   title: "OHDSI TAXIS",
