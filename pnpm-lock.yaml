@@ -27,7 +27,7 @@ importers:
         specifier: ^14.2.5
         version: 14.2.32(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       next-auth:
-        specifier: ^4.24.11
+        specifier: ^4
         version: 4.24.11(next@14.2.32(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       openai:
         specifier: ^4.55.0

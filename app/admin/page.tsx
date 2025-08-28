@@ -1,8 +1,10 @@
+// app/admin/page.tsx
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import { auth } from '@/lib/auth';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { Prisma, JobStatus } from '@prisma/client';
 import Link from 'next/link';
@@ -12,14 +14,14 @@ function fmt(d?: Date | null) {
   return d ? new Date(d).toLocaleString() : '';
 }
 
-export default async function AdminPage({ searchParams }: { searchParams?: { status?: string } }) {
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams?: { status?: string };
+}) {
   try {
-let session: Awaited<ReturnType<typeof auth>> | null = null;
-try {
-  session = await auth();
-} catch (e: unknown) {
-  console.error('ADMIN auth() failed', e);
-}
+    // v4: get the session with getServerSession(authOptions)
+    const session = await getServerSession(authOptions);
 
     if (!session?.user?.email) {
       return redirect('/login');
@@ -65,9 +67,11 @@ try {
         finishedAt: true,
         userId: true,
         outputBlobKey: true,
-        // relation name matches your Prisma model (capitalized `User`)
+        // Relation name matches your Prisma model (`User`)
         User: { select: { email: true } },
-        upload: { select: { id: true, originalName: true, blobKey: true, createdAt: true } },
+        upload: {
+          select: { id: true, originalName: true, blobKey: true, createdAt: true },
+        },
       },
     });
 
@@ -117,8 +121,7 @@ try {
                   {(j.rowsTotal ?? 0).toLocaleString()}
                 </td>
                 <td align="right">
-                  {(j.tokensIn ?? 0).toLocaleString()} /
-                  {(j.tokensOut ?? 0).toLocaleString()}
+                  {(j.tokensIn ?? 0).toLocaleString()} / {(j.tokensOut ?? 0).toLocaleString()}
                 </td>
                 <td align="right">
                   {typeof j.costCents === 'number' ? `$${(j.costCents / 100).toFixed(2)}` : '—'}
@@ -139,7 +142,7 @@ try {
         </table>
       </main>
     );
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error('ADMIN_PAGE_ERROR', e);
     return (
       <main style={{ padding: 24 }}>

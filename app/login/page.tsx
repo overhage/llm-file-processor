@@ -1,21 +1,12 @@
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
+"use client";
 
-import { signIn } from '@/lib/auth';
+import { signIn } from "next-auth/react";
 
 export default function LoginPage() {
-  async function doLogin() {
-    'use server';
-    await signIn('github'); // redirects via NextAuth
-  }
-
   return (
     <main style={{ padding: 24 }}>
       <h1>Sign in</h1>
-      <form action={doLogin}>
-        <button type="submit">Sign in with GitHub</button>
-      </form>
+      <button onClick={() => signIn("github")}>Sign in with GitHub</button>
     </main>
   );
 }
