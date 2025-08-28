@@ -10,7 +10,7 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
   external_node_modules = ["@prisma/client","prisma"]
-  included_files = ["**/node_modules/.prisma/client/**"]
+  included_files = ["**/node_modules/.prisma/client/**", "**/node_modules/@prisma/engines/**"]
 
 # Run cleanup daily at 03:00 UTC
 [functions."cleanup"]

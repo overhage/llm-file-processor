@@ -9,6 +9,7 @@ import { prisma } from '@/lib/db';
 import { Prisma, JobStatus } from '@prisma/client';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import AdminMaintenance from '@/components/AdminMaintenance'; // ← add
 
 function fmt(d?: Date | null) {
   return d ? new Date(d).toLocaleString() : '';
@@ -78,6 +79,11 @@ export default async function AdminPage({
     return (
       <main style={{ padding: 24, maxWidth: 1300, margin: '0 auto' }}>
         <h1>Admin — Jobs</h1>
+
+        {/* Maintenance panel */}
+        <div style={{ margin: '16px 0 24px' }}>
+          <AdminMaintenance />
+        </div>
 
         <div style={{ margin: '12px 0' }}>
           <strong>Filter:</strong>{' '}
