@@ -1,8 +1,5 @@
-// =============================================
-// Prisma schema (minimal)
-// =============================================
-// --- file: prisma/schema.prisma ---
-// Choose your provider. Neon/Supabase use "postgresql".
+// prisma/schema.prisma
+// (keep your existing generator and datasource blocks)
 
 generator client {
   provider = "prisma-client-js"
@@ -21,35 +18,109 @@ enum JobStatus {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  name          String?
-  image         String?
-  emailVerified DateTime?
-  role          String    @default("user") // "user" | "manager"
+  id       String    @id @default(cuid())
+  email    String    @unique
+  name     String? // ← add this
+  role     String
+  uploads  Upload[]
+  jobs     Job[]
+  // ↓↓↓ add these two back-relations for NextAuth
+  accounts Account[]
+  sessions Session[]
 
-  uploads   Upload[]
-  jobs      Job[]
-  createdAt DateTime  @default(now())
-  Account   Account[]
-  Session   Session[]
+  createdAt DateTime @default(now())
 }
 
+model Upload {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  blobKey      String
+  originalName String
+  createdAt    DateTime @default(now())
+  jobs         Job[]
+  store        String?  @db.VarChar(20)
+  contentType  String?  @db.VarChar(100)
+  size         Int?
+}
+
+model Job {
+  id            String    @id @default(cuid())
+  uploadId      String
+  upload        Upload    @relation(fields: [uploadId], references: [id])
+  status        JobStatus @default(queued)
+  error         String?
+  rowsTotal     Int?
+  rowsProcessed Int?
+  outputBlobKey String?
+  tokensIn      Int?
+  tokensOut     Int?
+  costCents     Int?
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  // You already had this relation named `User`
+  User          User?     @relation(fields: [userId], references: [id])
+  userId        String?
+}
+
+model MasterRecord {
+  pairId             String    @id
+  conceptA           String    @db.VarChar(255)
+  codeA              String    @db.VarChar(20)
+  conceptB           String    @db.VarChar(255)
+  codeB              String    @db.VarChar(20)
+  systemA            String    @db.VarChar(12)
+  systemB            String    @db.VarChar(12)
+  typeA              String    @db.VarChar(20)
+  typeB              String    @db.VarChar(20)
+  countsAB           Int
+  lift               Float?
+  relationshipType   String    @db.VarChar(12)
+  relationshipCode   Int
+  rational           String    @db.VarChar(255)
+  llmDate            DateTime?
+  llmName            String?   @db.VarChar(100)
+  llmVersion         String?   @db.VarChar(50)
+  humanDate          DateTime?
+  humanReviewer      String?   @db.VarChar(254)
+  humanReviewComment String?   @db.VarChar(255)
+  sourceCount        Int       @default(0)
+  status             Int       @default(0)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([codeA, systemA])
+  @@index([codeB, systemB])
+}
+
+model LlmCache {
+  id        String   @id @default(cuid())
+  promptKey String   @unique
+  result    String
+  tokensIn  Int?
+  tokensOut Int?
+  model     String?
+  createdAt DateTime @default(now())
+}
+
+/**
+ * --- NextAuth tables (standard v4 Prisma Adapter schema) ---
+ */
+
 model Account {
-  id                 String  @id @default(cuid())
-  userId             String
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String?
-  access_token       String?
-  expires_at         Int?
-  token_type         String?
-  scope              String?
-  id_token           String?
-  session_state      String?
-  oauth_token_secret String?
-  oauth_token        String?
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -71,98 +142,4 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
-}
-
-model Upload {
-  id           String @id @default(cuid())
-  userId       String
-  user         User   @relation(fields: [userId], references: [id])
-  blobKey      String @unique // <-- make the blob key unique
-  originalName String
-
-  // NEW (optional) metadata fields to match your code
-  store       String? // e.g., "uploads"
-  contentType String? // e.g., "text/csv"
-  size        Int? // bytes
-
-  createdAt DateTime @default(now())
-  jobs      Job[]
-
-  @@index([userId])
-  @@index([createdAt])
-}
-
-model Job {
-  id            String    @id @default(cuid())
-  uploadId      String
-  upload        Upload    @relation(fields: [uploadId], references: [id], onDelete: Cascade) // <-- cascade (optional but nice)
-  status        JobStatus @default(queued)
-  error         String?
-  rowsTotal     Int?
-  rowsProcessed Int?
-  outputBlobKey String?
-  tokensIn      Int?
-  tokensOut     Int?
-  costCents     Int?
-  createdAt     DateTime  @default(now())
-  startedAt     DateTime?
-  finishedAt    DateTime?
-  User          User?     @relation(fields: [userId], references: [id])
-  userId        String?
-
-  @@index([status, createdAt])
-}
-
-// Domain table: your master list + LLM enrichment
-model MasterRecord {
-  // Pair ID is the unique identifier for a particular pair of concepts
-  pairId String @id
-
-  // --- Concept & Code fields ---
-  conceptA String @db.VarChar(255) // should be >= 100 chars (validate in app)
-  codeA    String @db.VarChar(20)
-  conceptB String @db.VarChar(255) // should be >= 100 chars (validate in app)
-  codeB    String @db.VarChar(20)
-
-  systemA String @db.VarChar(12)
-  systemB String @db.VarChar(12)
-
-  typeA String @db.VarChar(20)
-  typeB String @db.VarChar(20)
-
-  countsAB Int
-  lift     Float?
-
-  relationshipType String @db.VarChar(12)
-  relationshipCode Int
-
-  rational String @db.VarChar(255) // explanation for the relationship
-
-  llmDate    DateTime?
-  llmName    String?   @db.VarChar(100)
-  llmVersion String?   @db.VarChar(50)
-
-  humanDate          DateTime?
-  humanReviewer      String?   @db.VarChar(254)
-  humanReviewComment String?   @db.VarChar(255)
-
-  sourceCount Int @default(0)
-  status      Int @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([codeA, systemA])
-  @@index([codeB, systemB])
-}
-
-// Optional de-dup cache to avoid identical LLM calls
-model LlmCache {
-  id        String   @id @default(cuid())
-  promptKey String   @unique // hash of prompt template + input
-  result    String // JSON/text result
-  tokensIn  Int?
-  tokensOut Int?
-  model     String?
-  createdAt DateTime @default(now())
 }

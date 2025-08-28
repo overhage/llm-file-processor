@@ -20,6 +20,7 @@ export const authOptions: NextAuthOptions = {
       try {
         const email = user.email?.toLowerCase();
         if (!email) return false;
+	const name = user.name ?? null;
 
         const adminEmails = (process.env.ADMIN_EMAILS ?? "")
           .toLowerCase()
@@ -30,8 +31,8 @@ export const authOptions: NextAuthOptions = {
 
         await prisma.user.upsert({
           where: { email },
-          create: { email, role },
-          update: { role },
+          create: { email, role, name },
+          update: { role, name },
         });
         return true;
       } catch (e) {
