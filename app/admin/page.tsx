@@ -25,14 +25,25 @@ export default async function AdminPage({ searchParams }: { searchParams?: { sta
     orderBy: [{ createdAt: 'desc' }],
     take: 200,
     select: {
-      id: true, status: true, error: true,
-      rowsTotal: true, rowsProcessed: true,
-      tokensIn: true, tokensOut: true, costCents: true,
-      createdAt: true, startedAt: true, finishedAt: true,
-      userId: true, outputBlobKey: true,
-      upload: { select: { id: true, originalName: true, blobKey: true } },
+      id: true,
+      status: true,
+      error: true,
+      rowsTotal: true,
+      rowsProcessed: true,
+      tokensIn: true,
+      tokensOut: true,
+      costCents: true,
+      createdAt: true,
+      startedAt: true,
+      finishedAt: true,
+      userId: true,
+      outputBlobKey: true,
+      // 👇 add this line to fetch the related user email
+      User: { select: { email: true } },
+      upload: { select: { id: true, originalName: true, blobKey: true, createdAt:   true } },
     },
   });
+
 
 
   return (
@@ -82,9 +93,12 @@ export default async function AdminPage({ searchParams }: { searchParams?: { sta
                   ? `$${(j.costCents / 100).toFixed(2)}`
                   : '—'}
               </td>
-              <td title={j.upload?.blobKey}>
-                {j.upload?.originalName || '—'}
+              <td title={j.userId ?? undefined}>
+                {j.User?.email ? j.User.email : <code>{j.userId ?? ''}</code>}
               </td>
+              <td title={j.upload?.blobKey ?? undefined}>
+	         {j.upload?.originalName ?? '—'}
+	      </td>
               <td>{fmt(j.createdAt)}</td>
               <td>{fmt(j.finishedAt)}</td>
               <td>
