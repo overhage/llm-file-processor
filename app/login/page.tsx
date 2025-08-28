@@ -7,7 +7,7 @@ import { signIn } from '@/lib/auth';
 export default function LoginPage() {
   async function doLogin() {
     'use server';
-    await signIn('github');
+    await signIn('github'); // redirects via NextAuth
   }
 
   return (
@@ -19,4 +19,3 @@ export default function LoginPage() {
     </main>
   );
 }
-
