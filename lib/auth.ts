@@ -9,10 +9,7 @@ export const {
   signIn,    // server action helpers
   signOut,
 } = NextAuth({
-  // Netlify / Vercel friendly
-  trustHost: true,
   secret: process.env.AUTH_SECRET,
-
   providers: [
     GitHub({
       clientId: process.env.GITHUB_ID ?? "",
