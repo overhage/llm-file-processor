@@ -213,34 +213,57 @@ export default async (req: Request) => {
       const a_before_b = n(cols[idx['a_before_b']])
       const b_before_a = n(cols[idx['b_before_a']])
 
+      const nANum = Number(nA);
+      const nBNum = Number(nB);
+      const totalNum = Number(total_persons);
+
       const pairId = `${code_a}|${system_a}__${code_b}|${system_b}`
       touchedPairIds.add(pairId)
 
+      const expectedObs = totalNum > 0
+        ? new Prisma.Decimal(nANum).mul(nBNum).div(totalNum)
+        : new Prisma.Decimal(0);
+
       // Upsert master (create if needed with identity fields, then increment counts)
-      await prisma.masterRecord.upsert({
+     await prisma.masterRecord.upsert({
         where: { pairId },
         create: {
           pairId,
-          concept_a, code_a, concept_b, code_b,
-          system_a, system_b, type_a, type_b,
-          // counts
-          cooc_obs, nA, nB, total_persons, cooc_event_count, a_before_b, b_before_a,
-          // relationship placeholders (will be filled by LLM pipeline elsewhere)
-          relationshipType: '', relationshipCode: 0, rational: '',
+          concept_a,
+          code_a,
+          concept_b,
+          code_b,
+          system_a,
+          system_b,
+          type_a,
+          type_b,
+          cooc_obs,
+          nA: nANum,
+          nB: nBNum,
+          total_persons: totalNum,
+          cooc_event_count,
+          a_before_b,
+          b_before_a,
+          relationshipType,
+          relationshipCode,
+          rational,                 // keep your existing field names
           source_count: 1,
+          expected_obs: expectedObs // <-- REQUIRED on create
         },
         update: {
-          concept_a, concept_b, // keep names fresh
-          nA: { increment: nA },
-          nB: { increment: nB },
+          concept_a,
+          concept_b,
+          nA: { increment: nANum },
+          nB: { increment: nBNum },
           cooc_obs: { increment: cooc_obs },
-          total_persons: { increment: total_persons },
+          total_persons: { increment: totalNum },
           cooc_event_count: { increment: cooc_event_count },
           a_before_b: { increment: a_before_b },
           b_before_a: { increment: b_before_a },
-          source_count: { increment: 1 },
-        },
-      })
+          source_count: { increment: 1 }
+          // we'll recompute expected_obs after the update (see below)
+        }
+      });
 
       // Fetch updated counters for this pair and recompute statistical fields
       const mr = await prisma.masterRecord.findUnique({
@@ -261,6 +284,19 @@ export default async (req: Request) => {
           b_before_a: mr.b_before_a,
           cooc_event_count: mr.cooc_event_count,
         })
+
+      // Recompute expected_obs using the persisted, updated counts
+      const mr = await prisma.masterRecord.findUnique({ where: { pairId } });
+      if (mr) {
+        const exp = mr.total_persons > 0
+          ? new Prisma.Decimal(mr.nA).mul(mr.nB).div(mr.total_persons)
+          : new Prisma.Decimal(0);
+        await prisma.masterRecord.update({
+          where: { pairId },
+          data: { expected_obs: exp }
+        });
+      }
+
 
         await prisma.masterRecord.update({
           where: { pairId },
