@@ -9,7 +9,10 @@ import { prisma } from '@/lib/db';
 import { Prisma, JobStatus } from '@prisma/client';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import AdminMaintenance from '@/components/AdminMaintenance'; // ← add
+
+// ⬇️ NEW
+import AdminMasterPanel from '@/components/AdminMasterPanel';
+import AdminMaintenance from '@/components/AdminMaintenance'; // (the maintenance UI you added)
 
 function fmt(d?: Date | null) {
   return d ? new Date(d).toLocaleString() : '';
@@ -18,24 +21,17 @@ function fmt(d?: Date | null) {
 export default async function AdminPage({
   searchParams,
 }: {
-  searchParams?: { status?: string };
+  searchParams?: { status?: string; q?: string; page?: string };
 }) {
   try {
-    // v4: get the session with getServerSession(authOptions)
     const session = await getServerSession(authOptions);
-
-    if (!session?.user?.email) {
-      return redirect('/login');
-    }
+    if (!session?.user?.email) return redirect('/login');
 
     const me = await prisma.user.findUnique({
       where: { email: session.user.email },
       select: { id: true, role: true, email: true },
     });
-    if (!me) {
-      console.error('ADMIN: no user row for session email', session.user.email);
-      return redirect('/login');
-    }
+    if (!me) return redirect('/login');
     if ((me.role ?? 'user') !== 'manager') {
       return (
         <main style={{ padding: 24 }}>
@@ -68,7 +64,6 @@ export default async function AdminPage({
         finishedAt: true,
         userId: true,
         outputBlobKey: true,
-        // Relation name matches your Prisma model (`User`)
         User: { select: { email: true } },
         upload: {
           select: { id: true, originalName: true, blobKey: true, createdAt: true },
@@ -80,8 +75,11 @@ export default async function AdminPage({
       <main style={{ padding: 24, maxWidth: 1300, margin: '0 auto' }}>
         <h1>Admin — Jobs</h1>
 
-        {/* Maintenance panel */}
-        <div style={{ margin: '16px 0 24px' }}>
+        {/* ⬇️ new MasterRecord panel (stats + search + download) */}
+        <AdminMasterPanel searchParams={searchParams} />
+
+        {/* ⬇️ maintenance actions (clear jobs, delete blobs, etc.) */}
+        <div style={{ margin: '24px 0' }}>
           <AdminMaintenance />
         </div>
 

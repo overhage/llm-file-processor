@@ -9,7 +9,7 @@ import LoginButton from "components/LoginButton";
 export const metadata: Metadata = {
   title: "OHDSI TAXIS",
   description:
-    "Working together on TAXIS we will create the worlds highest quality clinical knowledge graph.",
+    "taxis (τάξις) is a Greek word meaning order, arrangement, or rank. It's a theological concept referring to divine order and was applied to aspects like the order of priests in the Temple or proper conduct in congregational worship. The word can also refer to a biological response to a stimulus, called taxis. Working together on TAXIS we will create the worlds highest quality clinical knowledge graph.   ",
 };
 
 export default function LoginPage() {
