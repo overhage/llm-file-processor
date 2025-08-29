@@ -1,13 +1,35 @@
 // netlify/functions/process-upload-background.mts
-// Background worker: merges counts into MasterRecord, computes statistical columns
-// - Keeps uploaded columns in output
-// - Appends relationship fields (relationshipCode, relationshipType, rational)
-// - Increments only count fields in MasterRecord; NEVER writes stats directly before recompute
-// - Recomputes statistical fields after counts are updated (Wilson CI, Haldane correction, etc.)
-// - Writes enriched output `${jobId}.csv` and a master snapshot `master-snapshot/${jobId}.csv`
+
 
 import { getStore } from '@netlify/blobs'
 import { PrismaClient, Prisma } from '@prisma/client'
+// OpenAI SDK (v4)
+import OpenAI from 'openai'
+
+// model + limits via env
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-4-turbo'
+const LLM_MAX_CALLS_PER_JOB = Number(process.env.LLM_MAX_CALLS_PER_JOB ?? '50')
+
+// in-memory per-job cache so we don’t re-ask for the same pair in one upload
+const relCache = new Map<string, { code: number; type: string; rational: string }>()
+
+// exactly the 11 categories you defined in your Python script
+const RELATIONSHIP_TYPES: Record<number, string> = {
+  1: 'A causes B',
+  2: 'B causes A',
+  3: 'A indirectly causes B',
+  4: 'B indirectly causes A',
+  5: 'A and B share common cause',
+  6: 'Treatment of A causes B',
+  7: 'Treatment of B causes A',
+  8: 'A and B have similar initial presentations',
+  9: 'A is subset of B',
+  10: 'B is subset of A',
+  11: 'No clear relationship',
+}
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+
 
 const prisma = new PrismaClient()
 
@@ -161,6 +183,88 @@ function toDecimalOrZero(v: number, digits: number): Prisma.Decimal {
   return new Prisma.Decimal(vv.toFixed(digits))
 }
 
+function buildRelPrompt(args: {
+  concept_a: string
+  concept_b: string
+  events_ab: number
+  events_ab_ae: number
+}) {
+  const { concept_a, concept_b, events_ab, events_ab_ae } = args
+  return `
+You are an expert diagnostician identifying clinical relationships between diagnosis concepts.
+
+Statistical indicators:
+- events_ab (co-occurrences): ${events_ab}
+- events_ab_ae (actual/expected ratio): ${events_ab_ae.toFixed(2)}
+
+Interpretation guidelines:
+- ≥ 2.0: Strong statistical evidence
+- 1.5–1.99: Moderate evidence
+- 1.0–1.49: Weak evidence
+- < 1.0: Minimal evidence
+
+Rules to avoid speculation:
+- Direct/indirect causation only if explicitly accepted and (for indirect) the intermediate is named.
+- Common cause only with a clear third diagnosis.
+- Treatment-caused only if explicitly well-documented.
+- Similar presentation only if clinically documented.
+- Subset only if one is explicitly broader/unspecified.
+- Otherwise choose 11 (No clear relationship).
+
+Classify the relationship between:
+- Concept A: ${concept_a}
+- Concept B: ${concept_b}
+
+Categories:
+1: A causes B
+2: B causes A
+3: A indirectly causes B (explicit intermediate)
+4: B indirectly causes A (explicit intermediate)
+5: A and B share common cause (explicit third condition)
+6: Treatment of A causes B
+7: Treatment of B causes A
+8: A and B have similar initial presentations
+9: A is subset of B
+10: B is subset of A
+11: No clear relationship
+
+Answer EXACTLY as "<number>: <short description>: <concise rationale>".
+`.trim()
+}
+
+async function classifyRelationship(args: {
+  concept_a: string
+  concept_b: string
+  events_ab: number
+  events_ab_ae: number
+}): Promise<{ code: number; type: string; rational: string }> {
+  // no key → don’t call the API
+  if (!process.env.OPENAI_API_KEY) {
+    return { code: 11, type: RELATIONSHIP_TYPES[11], rational: 'No API key configured' }
+  }
+
+  const prompt = buildRelPrompt(args)
+
+  const resp = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    temperature: 0,
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const text = resp.choices?.[0]?.message?.content?.trim() ?? ''
+  // Expect "<num>: <short>: <rationale>"
+  const m = text.match(/^(\d+)\s*:\s*([^:]+?)\s*:\s*([\s\S]+)$/)
+  if (!m) {
+    return { code: 11, type: RELATIONSHIP_TYPES[11], rational: 'Unable to parse LLM output' }
+  }
+
+  const code = Math.max(1, Math.min(11, Number(m[1]) || 11))
+  const type = RELATIONSHIP_TYPES[code] || m[2].trim()
+  const rational = m[3].trim()
+  return { code, type, rational }
+}
+
+
 // ----------------------
 // Netlify Function handler
 // ----------------------
@@ -232,19 +336,51 @@ export default async (req: Request) => {
       const pairId = `${code_a}|${system_a}__${code_b}|${system_b}`
       touchedPairIds.add(pairId)
 
-      // Fetch any existing relationship annotations to avoid re-LLM-ing
-      const existing = await prisma.masterRecord.findUnique({
-        where: { pairId },
-        select: { relationshipType: true, relationshipCode: true, rational: true }
+// Any previously-annotated relationship?
+const existing = await prisma.masterRecord.findUnique({
+  where: { pairId },
+  select: { relationshipType: true, relationshipCode: true, rational: true }
+})
+
+// Default from DB (if present)
+let relationshipType = existing?.relationshipType ?? ''
+let relationshipCode = existing?.relationshipCode ?? 0
+let rational = existing?.rational ?? ''
+
+// Compute stats for this row (used for create path AND for events_ab_ae)
+const statsCreate = computeStats({ cooc_obs, nA, nB, total_persons, a_before_b, b_before_a })
+
+// Decide whether to call LLM
+const needLLM = !relationshipType && !(relationshipCode ?? 0)
+const callsSoFar = relCache.size
+if (needLLM && callsSoFar < LLM_MAX_CALLS_PER_JOB) {
+  // job-level cache first
+  const cached = relCache.get(pairId)
+  if (cached) {
+    relationshipType = cached.type
+    relationshipCode = cached.code
+    rational = cached.rational
+  } else {
+    const events_ab = cooc_obs
+    const events_ab_ae = statsCreate.lift || 0 // A/E ratio (lift)
+    try {
+      const res = await classifyRelationship({
+        concept_a, concept_b, events_ab, events_ab_ae,
       })
+      relationshipType = res.type
+      relationshipCode = res.code
+      rational = res.rational
+      relCache.set(pairId, res)
+    } catch (e) {
+      console.error('LLM_CLASSIFY_ERROR', pairId, e)
+      // fall back safely
+      relationshipType = ''
+      relationshipCode = 0
+      rational = 'LLM error'
+    }
+  }
+}
 
-      // Relationship fields (schema requires non-null)
-      const relationshipType = existing?.relationshipType ?? ''
-      const relationshipCode = existing?.relationshipCode ?? 0
-      const rational = existing?.rational ?? ''
-
-      // Compute stats for CREATE path based on this row’s counts
-      const statsCreate = computeStats({ cooc_obs, nA, nB, total_persons, a_before_b, b_before_a })
 
       // Upsert master (create if needed with identity fields + stats, then increment counts on update)
       await prisma.masterRecord.upsert({
@@ -326,6 +462,21 @@ export default async (req: Request) => {
           a_before_b: mr.a_before_b,
           b_before_a: mr.b_before_a,
         })
+
+      if ((!existing?.relationshipType && !(existing?.relationshipCode ?? 0)) &&                   (relationshipType || relationshipCode)) {
+        await prisma.masterRecord.update({
+          where: { pairId },
+          data: {
+            relationshipType,
+            relationshipCode,
+            rational,
+            llm_date: new Date(),
+            llm_name: 'OpenAI',
+            llm_version: OPENAI_MODEL,
+          },
+        })
+      }
+
 
         await prisma.masterRecord.update({
           where: { pairId },
