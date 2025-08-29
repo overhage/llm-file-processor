@@ -119,9 +119,9 @@ model MasterRecord {
   confidence_b_to_a      Decimal @db.Decimal(19, 4)
 
   // Relationship fields
-  relationshipType String @db.VarChar(12)
+  relationshipType String @db.VarChar(64)
   relationshipCode Int
-  rational         String @db.VarChar(255)
+  rational         String @db.VarChar(1024)
 
   // Metadata
   source_count     Int
