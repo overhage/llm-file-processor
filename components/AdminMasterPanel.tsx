@@ -6,6 +6,17 @@ function fmt(d?: Date | null) {
   return d ? new Date(d).toLocaleString() : '—';
 }
 
+const dec = (v: unknown, dp = 4) => {
+  if (v == null) return '—';
+  const s =
+    typeof v === 'object' && v !== null && 'toString' in v
+      ? (v as any).toString()
+      : String(v);
+  const n = Number(s);
+  return Number.isFinite(n) ? n.toFixed(dp) : s;
+};
+
+
 export default async function AdminMasterPanel({
   searchParams,
 }: {
@@ -60,8 +71,10 @@ export default async function AdminMasterPanel({
             concept_b: true,
             code_b: true,
             system_b: true,
+            lift: true, 
             relationshipType: true,
             relationshipCode: true,
+            rational: true,
             updatedAt: true,
             cooc_obs: true,
             nA: true,
@@ -121,7 +134,10 @@ export default async function AdminMasterPanel({
                 <th align="left">Pair</th>
                 <th align="left">A (code|system)</th>
                 <th align="left">B (code|system)</th>
-                <th align="left">Rel</th>
+                <th align="right">Lift</th>
+                <th align="left">Rel Type</th> 
+                <th align="right">Rel Code</th>
+                <th align="left">Rationale</th>
                 <th align="right">cooc_obs</th>
                 <th align="left">Updated</th>
               </tr>
@@ -136,7 +152,10 @@ export default async function AdminMasterPanel({
                   <td title={r.concept_b}>
                     {r.concept_b} <small>({r.code_b}|{r.system_b})</small>
                   </td>
-                  <td>{r.relationshipType || (r.relationshipCode ? r.relationshipCode : '—')}</td>
+                  <td align="right">{dec(r.lift, 4)}</td>
+                  <td>{r.relationshipType || '—'}</td>
+                  <td align="right">{r.relationshipCode ?? 0}</td>
+                  <td title={r.rational || ''}>{r.rational || '—'}</td>
                   <td align="right">{(r.cooc_obs ?? 0).toLocaleString()}</td>
                   <td>{fmt(r.updatedAt)}</td>
                 </tr>

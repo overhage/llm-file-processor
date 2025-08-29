@@ -9,8 +9,6 @@ import { prisma } from '@/lib/db';
 import { Prisma, JobStatus } from '@prisma/client';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-
-// ⬇️ NEW
 import AdminMasterPanel from '@/components/AdminMasterPanel';
 import AdminMaintenance from '@/components/AdminMaintenance'; // (the maintenance UI you added)
 
@@ -73,16 +71,17 @@ export default async function AdminPage({
 
     return (
       <main style={{ padding: 24, maxWidth: 1300, margin: '0 auto' }}>
-        <h1>Admin — Jobs</h1>
+        <h1>Administrator</h1>
 
-        {/* ⬇️ new MasterRecord panel (stats + search + download) */}
+        {/* MasterRecord panel (stats + search + download) */}
         <AdminMasterPanel searchParams={searchParams} />
 
-        {/* ⬇️ maintenance actions (clear jobs, delete blobs, etc.) */}
+        {/* maintenance actions (clear jobs, delete blobs, etc.) */}
         <div style={{ margin: '24px 0' }}>
           <AdminMaintenance />
         </div>
 
+        <h2>Jobs</h2>
         <div style={{ margin: '12px 0' }}>
           <strong>Filter:</strong>{' '}
           <Link href="/admin">All</Link>{' '}
