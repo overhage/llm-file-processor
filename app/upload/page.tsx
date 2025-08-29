@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import AppHeader from '@/components/AppHeader';
 
 const REQUIRED_COLS = [
   'concept_a','code_a','concept_b','code_b','system_a','system_b','type_a','type_b',
@@ -117,7 +118,9 @@ export default function UploadPage() {
   }
 
   return (
-    <main style={{ padding: 24, maxWidth: 720, margin: '0 auto' }}>
+
+   <main style={{ padding: 24, maxWidth: 1300, margin: '0 auto' }}>
+
       <h1>Upload CSV</h1>
 
       <p style={{ marginTop: 8 }}>

@@ -1,5 +1,4 @@
-// netlify/functions/process-upload-background.mts
-
+// netlify/functions/process-upload-background.ts
 
 import { getStore } from '@netlify/blobs'
 import { PrismaClient, Prisma } from '@prisma/client'
@@ -13,7 +12,7 @@ const LLM_MAX_CALLS_PER_JOB = Number(process.env.LLM_MAX_CALLS_PER_JOB ?? '50')
 // in-memory per-job cache so we don’t re-ask for the same pair in one upload
 const relCache = new Map<string, { code: number; type: string; rational: string }>()
 
-// exactly the 11 categories you defined in your Python script
+// exactly the 11 categories used by the classifier
 const RELATIONSHIP_TYPES: Record<number, string> = {
   1: 'A causes B',
   2: 'B causes A',
@@ -29,7 +28,6 @@ const RELATIONSHIP_TYPES: Record<number, string> = {
 }
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-
 
 const prisma = new PrismaClient()
 
@@ -54,6 +52,10 @@ function round(value: number | null, digits: number): number {
 function safeDiv(a: number, b: number): number {
   if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return 0
   return a / b
+}
+function trimLen(sv: unknown, max: number): string {
+  const t = s(sv)
+  return t.length > max ? t.slice(0, max) : t
 }
 
 // Wilson interval (two-sided 95%) for proportion p with n trials
@@ -238,7 +240,6 @@ async function classifyRelationship(args: {
   events_ab: number
   events_ab_ae: number
 }): Promise<{ code: number; type: string; rational: string }> {
-  // no key → don’t call the API
   if (!process.env.OPENAI_API_KEY) {
     return { code: 11, type: RELATIONSHIP_TYPES[11], rational: 'No API key configured' }
   }
@@ -252,7 +253,6 @@ async function classifyRelationship(args: {
   })
 
   const text = resp.choices?.[0]?.message?.content?.trim() ?? ''
-  // Expect "<num>: <short>: <rationale>"
   const m = text.match(/^(\d+)\s*:\s*([^:]+?)\s*:\s*([\s\S]+)$/)
   if (!m) {
     return { code: 11, type: RELATIONSHIP_TYPES[11], rational: 'Unable to parse LLM output' }
@@ -264,7 +264,9 @@ async function classifyRelationship(args: {
   return { code, type, rational }
 }
 
-// minimally-correct CSV line splitter (RFC4180-ish)
+// ----------------------
+// CSV helpers
+// ----------------------
 function splitCsv(line: string): string[] {
   const out: string[] = []
   let cur = ''
@@ -274,41 +276,26 @@ function splitCsv(line: string): string[] {
     const ch = line[i]
     if (inQuotes) {
       if (ch === '"') {
-        // escaped quote
-        if (line[i + 1] === '"') {
-          cur += '"'
-          i++
-        } else {
-          inQuotes = false
-        }
-      } else {
-        cur += ch
-      }
+        if (line[i + 1] === '"') { cur += '"'; i++ } else { inQuotes = false }
+      } else { cur += ch }
     } else {
-      if (ch === '"') {
-        inQuotes = true
-      } else if (ch === ',') {
-        out.push(cur)
-        cur = ''
-      } else {
-        cur += ch
-      }
+      if (ch === '"') { inQuotes = true }
+      else if (ch === ',') { out.push(cur); cur = '' }
+      else { cur += ch }
     }
   }
   out.push(cur)
   return out
 }
 
-// consider a row "empty" if every cell is empty/whitespace after trimming quotes
 function isEmptyRow(cols: string[]): boolean {
   return cols.every(c => c.trim() === '')
 }
 
-
 // ----------------------
 // Netlify Function handler
 // ----------------------
-export default async (req: Request) => {
+export default async function handler(req: Request) {
   try {
     const body = await req.json().catch(() => ({}))
     const jobId: string = body.jobId
@@ -335,7 +322,7 @@ export default async (req: Request) => {
 
     const text = typeof file === 'string' ? file : await (file as Blob).text()
 
-    // Normalize newlines, keep even blank lines (we’ll filter properly later)
+    // Normalize newlines
     const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
 
     // header = first non-empty (non-comma-only) line
@@ -348,11 +335,7 @@ export default async (req: Request) => {
     if (!header) throw new Error('CSV header not found')
 
     const hdr = splitCsv(header).map(h => h.trim())
-    const idx = Object.fromEntries(hdr.map((name, i) => [name, i])) as Record<string, number>
-
-
-    // Expect these columns (already validated on upload page)
-    const idx = Object.fromEntries(hdr.map((name, i) => [name, i])) as Record<string, number>
+    const hdrIndex: Record<string, number> = Object.fromEntries(hdr.map((name, i) => [name, i]))
 
     // Prepare output: keep all original columns + relationship fields
     const REL_FIELDS = ['relationshipCode', 'relationshipType', 'rational'] as const
@@ -364,126 +347,114 @@ export default async (req: Request) => {
 
     let processed = 0
 
-for (let li = startIdx; li < lines.length; li++) {
-  const raw = lines[li]
+    for (let li = startIdx; li < lines.length; li++) {
+      const raw = lines[li]
 
-// Skip totally blank lines or comma-only padding rows
-  if (!raw || raw.trim() === '') continue
+      // Skip totally blank lines or comma-only padding rows
+      if (!raw || raw.trim() === '') continue
 
-  const cols = splitCsv(raw)
-  if (isEmptyRow(cols)) continue
+      const cols = splitCsv(raw)
+      if (isEmptyRow(cols)) continue
 
-  // Guard: ignore rows that don’t have the same number of columns as header
-  // (Excel sometimes writes stray lines)
-  if (cols.length < hdr.length) continue
+      // Guard: ignore rows that don’t have at least header columns
+      if (cols.length < hdr.length) continue
 
-  // Pull fields safely
-  const get = (name: string) => {
-    const i = idx[name]
-    return i == null ? '' : cols[i] ?? ''
-  }
+      const get = (name: string) => {
+        const i = hdrIndex[name]
+        return i == null ? '' : cols[i] ?? ''
+      }
 
-  // Require the basics to treat as a data row
-  const concept_a = s(get('concept_a'))
-  const concept_b = s(get('concept_b'))
-  const code_a = s(get('code_a'))
-  const code_b = s(get('code_b'))
-  const system_a = s(get('system_a'))
-  const system_b = s(get('system_b'))
+      // Required identifiers
+      const concept_a = s(get('concept_a'))
+      const concept_b = s(get('concept_b'))
+      const code_a = s(get('code_a'))
+      const code_b = s(get('code_b'))
+      const system_a = s(get('system_a'))
+      const system_b = s(get('system_b'))
+      const type_a = s(get('type_a'))
+      const type_b = s(get('type_b'))
 
-  // If core identifiers are missing, skip the line
-  if (!concept_a && !concept_b && !code_a && !code_b) continue
-  if (!code_a || !code_b || !system_a || !system_b) continue
+      if (!concept_a && !concept_b && !code_a && !code_b) continue
+      if (!code_a || !code_b || !system_a || !system_b) continue
 
-  // now parse the numerics using your n()
-  const cooc_obs = n(get('cooc_obs'))
-  const nA = n(get('nA'))
-  const nB = n(get('nB'))
-  const total_persons = n(get('total_persons'))
-  const cooc_event_count = n(get('cooc_event_count'))
-  const a_before_b = n(get('a_before_b'))
-  const b_before_a = n(get('b_before_a'))
-
-      // read required values
-      const concept_a = s(cols[idx['concept_a']])
-      const concept_b = s(cols[idx['concept_b']])
-      const code_a = s(cols[idx['code_a']])
-      const code_b = s(cols[idx['code_b']])
-      const system_a = s(cols[idx['system_a']])
-      const system_b = s(cols[idx['system_b']])
-      const type_a = s(cols[idx['type_a']])
-      const type_b = s(cols[idx['type_b']])
-
-      const cooc_obs = n(cols[idx['cooc_obs']])
-      const nA = n(cols[idx['nA']])
-      const nB = n(cols[idx['nB']])
-      const total_persons = n(cols[idx['total_persons']])
-      const cooc_event_count = n(cols[idx['cooc_event_count']])
-      const a_before_b = n(cols[idx['a_before_b']])
-      const b_before_a = n(cols[idx['b_before_a']])
+      // Numerics
+      const cooc_obs = n(get('cooc_obs'))
+      const nA = n(get('nA'))
+      const nB = n(get('nB'))
+      const total_persons = n(get('total_persons'))
+      const cooc_event_count = n(get('cooc_event_count'))
+      const a_before_b = n(get('a_before_b'))
+      const b_before_a = n(get('b_before_a'))
 
       const pairId = `${code_a}|${system_a}__${code_b}|${system_b}`
       touchedPairIds.add(pairId)
 
-// Any previously-annotated relationship?
-const existing = await prisma.masterRecord.findUnique({
-  where: { pairId },
-  select: { relationshipType: true, relationshipCode: true, rational: true }
-})
-
-// Default from DB (if present)
-let relationshipType = existing?.relationshipType ?? ''
-let relationshipCode = existing?.relationshipCode ?? 0
-let rational = existing?.rational ?? ''
-
-// Compute stats for this row (used for create path AND for events_ab_ae)
-const statsCreate = computeStats({ cooc_obs, nA, nB, total_persons, a_before_b, b_before_a })
-
-// Decide whether to call LLM
-const needLLM = !relationshipType && !(relationshipCode ?? 0)
-const callsSoFar = relCache.size
-if (needLLM && callsSoFar < LLM_MAX_CALLS_PER_JOB) {
-  // job-level cache first
-  const cached = relCache.get(pairId)
-  if (cached) {
-    relationshipType = cached.type
-    relationshipCode = cached.code
-    rational = cached.rational
-  } else {
-    const events_ab = cooc_obs
-    const events_ab_ae = statsCreate.lift || 0 // A/E ratio (lift)
-    try {
-      const res = await classifyRelationship({
-        concept_a, concept_b, events_ab, events_ab_ae,
+      // Any previously-annotated relationship?
+      const existing = await prisma.masterRecord.findUnique({
+        where: { pairId },
+        select: { relationshipType: true, relationshipCode: true, rational: true },
       })
-      relationshipType = res.type
-      relationshipCode = res.code
-      rational = res.rational
-      relCache.set(pairId, res)
-    } catch (e) {
-      console.error('LLM_CLASSIFY_ERROR', pairId, e)
-      // fall back safely
-      relationshipType = ''
-      relationshipCode = 0
-      rational = 'LLM error'
-    }
-  }
-}
 
+      // Defaults from DB (if present)
+      let relationshipType = existing?.relationshipType ?? ''
+      let relationshipCode = existing?.relationshipCode ?? 0
+      let rational = existing?.rational ?? ''
+
+      // Stats from the row
+      const statsCreate = computeStats({ cooc_obs, nA, nB, total_persons, a_before_b, b_before_a })
+
+      // Decide whether to call LLM
+      const needLLM = !relationshipType && !(relationshipCode ?? 0)
+      const callsSoFar = relCache.size
+      if (needLLM && callsSoFar < LLM_MAX_CALLS_PER_JOB) {
+        const cached = relCache.get(pairId)
+        if (cached) {
+          relationshipType = cached.type
+          relationshipCode = cached.code
+          rational = cached.rational
+        } else {
+          const events_ab = cooc_obs
+          const events_ab_ae = statsCreate.lift || 0 // A/E ratio (lift)
+          try {
+            const res = await classifyRelationship({ concept_a, concept_b, events_ab, events_ab_ae })
+            relationshipType = res.type
+            relationshipCode = res.code
+            rational = res.rational
+            relCache.set(pairId, res)
+          } catch (e) {
+            console.error('LLM_CLASSIFY_ERROR', pairId, e)
+            relationshipType = ''
+            relationshipCode = 0
+            rational = 'LLM error'
+          }
+        }
+      }
+
+      // DB-safe strings (prevent P2000 overruns)
+      const concept_a_db = trimLen(concept_a, 255)
+      const concept_b_db = trimLen(concept_b, 255)
+      const code_a_db = trimLen(code_a, 20)
+      const code_b_db = trimLen(code_b, 20)
+      const system_a_db = trimLen(system_a, 12)
+      const system_b_db = trimLen(system_b, 12)
+      const type_a_db = trimLen(type_a, 20)
+      const type_b_db = trimLen(type_b, 20)
+      const relationshipType_db = trimLen(relationshipType, 12)
+      const rational_db = trimLen(rational, 255)
 
       // Upsert master (create if needed with identity fields + stats, then increment counts on update)
       await prisma.masterRecord.upsert({
         where: { pairId },
         create: {
           pairId,
-          concept_a,
-          code_a,
-          concept_b,
-          code_b,
-          system_a,
-          system_b,
-          type_a,
-          type_b,
+          concept_a: concept_a_db,
+          code_a: code_a_db,
+          concept_b: concept_b_db,
+          code_b: code_b_db,
+          system_a: system_a_db,
+          system_b: system_b_db,
+          type_a: type_a_db,
+          type_b: type_b_db,
           cooc_obs,
           nA,
           nB,
@@ -492,34 +463,34 @@ if (needLLM && callsSoFar < LLM_MAX_CALLS_PER_JOB) {
           a_before_b,
           b_before_a,
           // stats (all required in schema)
-          expected_obs:        toDecimalOrZero(statsCreate.expected_obs, 2),
-          lift:                 toDecimalOrZero(statsCreate.lift, 4),
-          lift_lower_95:        toDecimalOrZero(statsCreate.lift_lower_95, 4),
-          lift_upper_95:        toDecimalOrZero(statsCreate.lift_upper_95, 4),
-          z_score:              toDecimalOrZero(statsCreate.z_score, 4),
-          ab_h:                 toDecimalOrZero(statsCreate.ab_h, 2),
-          a_only_h:             toDecimalOrZero(statsCreate.a_only_h, 2),
-          b_only_h:             toDecimalOrZero(statsCreate.b_only_h, 2),
-          neither_h:            toDecimalOrZero(statsCreate.neither_h, 2),
-          odds_ratio:           toDecimalOrZero(statsCreate.odds_ratio, 4),
-          or_lower_95:          toDecimalOrZero(statsCreate.or_lower_95, 4),
-          or_upper_95:          toDecimalOrZero(statsCreate.or_upper_95, 4),
+          expected_obs: toDecimalOrZero(statsCreate.expected_obs, 2),
+          lift: toDecimalOrZero(statsCreate.lift, 4),
+          lift_lower_95: toDecimalOrZero(statsCreate.lift_lower_95, 4),
+          lift_upper_95: toDecimalOrZero(statsCreate.lift_upper_95, 4),
+          z_score: toDecimalOrZero(statsCreate.z_score, 4),
+          ab_h: toDecimalOrZero(statsCreate.ab_h, 2),
+          a_only_h: toDecimalOrZero(statsCreate.a_only_h, 2),
+          b_only_h: toDecimalOrZero(statsCreate.b_only_h, 2),
+          neither_h: toDecimalOrZero(statsCreate.neither_h, 2),
+          odds_ratio: toDecimalOrZero(statsCreate.odds_ratio, 4),
+          or_lower_95: toDecimalOrZero(statsCreate.or_lower_95, 4),
+          or_upper_95: toDecimalOrZero(statsCreate.or_upper_95, 4),
           directionality_ratio: toDecimalOrZero(statsCreate.directionality_ratio, 4),
-          dir_prop_a_before_b:  toDecimalOrZero(statsCreate.dir_prop_a_before_b, 4),
-          dir_lower_95:         toDecimalOrZero(statsCreate.dir_lower_95, 4),
-          dir_upper_95:         toDecimalOrZero(statsCreate.dir_upper_95, 4),
-          confidence_a_to_b:    toDecimalOrZero(statsCreate.confidence_a_to_b, 4),
-          confidence_b_to_a:    toDecimalOrZero(statsCreate.confidence_b_to_a, 4),
+          dir_prop_a_before_b: toDecimalOrZero(statsCreate.dir_prop_a_before_b, 4),
+          dir_lower_95: toDecimalOrZero(statsCreate.dir_lower_95, 4),
+          dir_upper_95: toDecimalOrZero(statsCreate.dir_upper_95, 4),
+          confidence_a_to_b: toDecimalOrZero(statsCreate.confidence_a_to_b, 4),
+          confidence_b_to_a: toDecimalOrZero(statsCreate.confidence_b_to_a, 4),
           // relationship + metadata
-          relationshipType,
+          relationshipType: relationshipType_db,
           relationshipCode,
-          rational,
+          rational: rational_db,
           source_count: 1,
           status: 'computed',
         },
         update: {
-          concept_a,
-          concept_b,
+          concept_a: concept_a_db,
+          concept_b: concept_b_db,
           nA: { increment: nA },
           nB: { increment: nB },
           cooc_obs: { increment: cooc_obs },
@@ -529,16 +500,19 @@ if (needLLM && callsSoFar < LLM_MAX_CALLS_PER_JOB) {
           b_before_a: { increment: b_before_a },
           source_count: { increment: 1 },
           status: 'computed',
-          // If you later want to accept relationship fields from upload, set them conditionally here.
-        }
+        },
       })
 
       // Fetch updated counters for this pair and recompute statistical fields from persisted totals
       const mr = await prisma.masterRecord.findUnique({
         where: { pairId },
         select: {
-          cooc_obs: true, nA: true, nB: true, total_persons: true,
-          a_before_b: true, b_before_a: true,
+          cooc_obs: true,
+          nA: true,
+          nB: true,
+          total_persons: true,
+          a_before_b: true,
+          b_before_a: true,
         },
       })
 
@@ -552,50 +526,50 @@ if (needLLM && callsSoFar < LLM_MAX_CALLS_PER_JOB) {
           b_before_a: mr.b_before_a,
         })
 
-      if ((!existing?.relationshipType && !(existing?.relationshipCode ?? 0)) &&                   (relationshipType || relationshipCode)) {
+        // Backfill relationship metadata if we just obtained it
+        if ((!existing?.relationshipType && !(existing?.relationshipCode ?? 0)) && (relationshipType || relationshipCode)) {
+          await prisma.masterRecord.update({
+            where: { pairId },
+            data: {
+              relationshipType: relationshipType_db,
+              relationshipCode,
+              rational: rational_db,
+              llm_date: new Date(),
+              llm_name: 'OpenAI',
+              llm_version: OPENAI_MODEL,
+            },
+          })
+        }
+
         await prisma.masterRecord.update({
           where: { pairId },
           data: {
-            relationshipType,
-            relationshipCode,
-            rational,
-            llm_date: new Date(),
-            llm_name: 'OpenAI',
-            llm_version: OPENAI_MODEL,
-          },
-        })
-      }
-
-
-        await prisma.masterRecord.update({
-          where: { pairId },
-          data: {
-            expected_obs:        toDecimalOrZero(stats.expected_obs, 2),
-            lift:                 toDecimalOrZero(stats.lift, 4),
-            lift_lower_95:        toDecimalOrZero(stats.lift_lower_95, 4),
-            lift_upper_95:        toDecimalOrZero(stats.lift_upper_95, 4),
-            z_score:              toDecimalOrZero(stats.z_score, 4),
-            ab_h:                 toDecimalOrZero(stats.ab_h, 2),
-            a_only_h:             toDecimalOrZero(stats.a_only_h, 2),
-            b_only_h:             toDecimalOrZero(stats.b_only_h, 2),
-            neither_h:            toDecimalOrZero(stats.neither_h, 2),
-            odds_ratio:           toDecimalOrZero(stats.odds_ratio, 4),
-            or_lower_95:          toDecimalOrZero(stats.or_lower_95, 4),
-            or_upper_95:          toDecimalOrZero(stats.or_upper_95, 4),
+            expected_obs: toDecimalOrZero(stats.expected_obs, 2),
+            lift: toDecimalOrZero(stats.lift, 4),
+            lift_lower_95: toDecimalOrZero(stats.lift_lower_95, 4),
+            lift_upper_95: toDecimalOrZero(stats.lift_upper_95, 4),
+            z_score: toDecimalOrZero(stats.z_score, 4),
+            ab_h: toDecimalOrZero(stats.ab_h, 2),
+            a_only_h: toDecimalOrZero(stats.a_only_h, 2),
+            b_only_h: toDecimalOrZero(stats.b_only_h, 2),
+            neither_h: toDecimalOrZero(stats.neither_h, 2),
+            odds_ratio: toDecimalOrZero(stats.odds_ratio, 4),
+            or_lower_95: toDecimalOrZero(stats.or_lower_95, 4),
+            or_upper_95: toDecimalOrZero(stats.or_upper_95, 4),
             directionality_ratio: toDecimalOrZero(stats.directionality_ratio, 4),
-            dir_prop_a_before_b:  toDecimalOrZero(stats.dir_prop_a_before_b, 4),
-            dir_lower_95:         toDecimalOrZero(stats.dir_lower_95, 4),
-            dir_upper_95:         toDecimalOrZero(stats.dir_upper_95, 4),
-            confidence_a_to_b:    toDecimalOrZero(stats.confidence_a_to_b, 4),
-            confidence_b_to_a:    toDecimalOrZero(stats.confidence_b_to_a, 4),
+            dir_prop_a_before_b: toDecimalOrZero(stats.dir_prop_a_before_b, 4),
+            dir_lower_95: toDecimalOrZero(stats.dir_lower_95, 4),
+            dir_upper_95: toDecimalOrZero(stats.dir_upper_95, 4),
+            confidence_a_to_b: toDecimalOrZero(stats.confidence_a_to_b, 4),
+            confidence_b_to_a: toDecimalOrZero(stats.confidence_b_to_a, 4),
           },
         })
       }
 
-          // Enrich row output – keep input columns and append relationship fields
-          const rel = [String(relationshipCode), relationshipType, rational]
-          outLines.push(line + ',' + rel.join(','))
-          processed++
+      // Enrich row output – keep input columns and append relationship fields (use long label in CSV)
+      const rel = [String(relationshipCode), relationshipType, rational]
+      outLines.push(raw + ',' + rel.join(','))
+      processed++
     }
 
     // Write enriched output
@@ -605,7 +579,7 @@ if (needLLM && callsSoFar < LLM_MAX_CALLS_PER_JOB) {
 
     // Snapshot all touched master rows
     const pairIds = Array.from(touchedPairIds)
-    let snapshot = [] as any[]
+    let snapshot: any[] = []
     if (pairIds.length > 0) {
       snapshot = await prisma.masterRecord.findMany({
         where: { pairId: { in: pairIds } },

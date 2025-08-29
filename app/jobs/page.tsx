@@ -9,6 +9,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import SiteNav from "@/components/SiteNav";
 import AutoRefresh from "@/components/AutoRefresh";
+import AppHeader from '@/components/AppHeader';
 
 function fmt(d?: Date | null) {
   return d ? new Date(d).toLocaleString() : "";
@@ -42,7 +43,10 @@ export default async function JobsPage() {
   });
 
   return (
-    <main style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+
+      <main style={{ padding: 24, maxWidth: 1300, margin: '0 auto' }}>
+
+
       <SiteNav current="jobs" />
       <h1>Your Uploads</h1>
       <AutoRefresh intervalSec={10} enabledByDefault={true} />
@@ -88,6 +92,6 @@ export default async function JobsPage() {
           )}
         </tbody>
       </table>
-    </main>
-  );
+   </main>
+    );
 }
