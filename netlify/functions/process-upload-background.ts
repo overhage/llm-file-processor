@@ -2,7 +2,6 @@
 
 import { getStore } from '@netlify/blobs'
 import { PrismaClient, Prisma } from '@prisma/client'
-// OpenAI SDK (v4)
 import OpenAI from 'openai'
 
 // model + limits via env
