@@ -264,6 +264,46 @@ async function classifyRelationship(args: {
   return { code, type, rational }
 }
 
+// minimally-correct CSV line splitter (RFC4180-ish)
+function splitCsv(line: string): string[] {
+  const out: string[] = []
+  let cur = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (inQuotes) {
+      if (ch === '"') {
+        // escaped quote
+        if (line[i + 1] === '"') {
+          cur += '"'
+          i++
+        } else {
+          inQuotes = false
+        }
+      } else {
+        cur += ch
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true
+      } else if (ch === ',') {
+        out.push(cur)
+        cur = ''
+      } else {
+        cur += ch
+      }
+    }
+  }
+  out.push(cur)
+  return out
+}
+
+// consider a row "empty" if every cell is empty/whitespace after trimming quotes
+function isEmptyRow(cols: string[]): boolean {
+  return cols.every(c => c.trim() === '')
+}
+
 
 // ----------------------
 // Netlify Function handler
@@ -294,9 +334,22 @@ export default async (req: Request) => {
     if (!file) throw new Error('Upload blob not found: ' + uploadBlobKey)
 
     const text = typeof file === 'string' ? file : await (file as Blob).text()
-    const rows = text.split(/\r?\n/)
-    const header = rows.shift() || ''
-    const hdr = header.split(',').map((h) => h.trim())
+
+    // Normalize newlines, keep even blank lines (we’ll filter properly later)
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+
+    // header = first non-empty (non-comma-only) line
+    let header = ''
+    let startIdx = 0
+    for (; startIdx < lines.length; startIdx++) {
+      const testCols = splitCsv(lines[startIdx])
+      if (!isEmptyRow(testCols)) { header = lines[startIdx]; startIdx++; break }
+    }
+    if (!header) throw new Error('CSV header not found')
+
+    const hdr = splitCsv(header).map(h => h.trim())
+    const idx = Object.fromEntries(hdr.map((name, i) => [name, i])) as Record<string, number>
+
 
     // Expect these columns (already validated on upload page)
     const idx = Object.fromEntries(hdr.map((name, i) => [name, i])) as Record<string, number>
@@ -311,9 +364,45 @@ export default async (req: Request) => {
 
     let processed = 0
 
-    for (const line of rows) {
-      const cols = line.split(',')
-      if (cols.length === 1 && cols[0].trim() === '') continue
+for (let li = startIdx; li < lines.length; li++) {
+  const raw = lines[li]
+
+// Skip totally blank lines or comma-only padding rows
+  if (!raw || raw.trim() === '') continue
+
+  const cols = splitCsv(raw)
+  if (isEmptyRow(cols)) continue
+
+  // Guard: ignore rows that don’t have the same number of columns as header
+  // (Excel sometimes writes stray lines)
+  if (cols.length < hdr.length) continue
+
+  // Pull fields safely
+  const get = (name: string) => {
+    const i = idx[name]
+    return i == null ? '' : cols[i] ?? ''
+  }
+
+  // Require the basics to treat as a data row
+  const concept_a = s(get('concept_a'))
+  const concept_b = s(get('concept_b'))
+  const code_a = s(get('code_a'))
+  const code_b = s(get('code_b'))
+  const system_a = s(get('system_a'))
+  const system_b = s(get('system_b'))
+
+  // If core identifiers are missing, skip the line
+  if (!concept_a && !concept_b && !code_a && !code_b) continue
+  if (!code_a || !code_b || !system_a || !system_b) continue
+
+  // now parse the numerics using your n()
+  const cooc_obs = n(get('cooc_obs'))
+  const nA = n(get('nA'))
+  const nB = n(get('nB'))
+  const total_persons = n(get('total_persons'))
+  const cooc_event_count = n(get('cooc_event_count'))
+  const a_before_b = n(get('a_before_b'))
+  const b_before_a = n(get('b_before_a'))
 
       // read required values
       const concept_a = s(cols[idx['concept_a']])
@@ -503,10 +592,10 @@ if (needLLM && callsSoFar < LLM_MAX_CALLS_PER_JOB) {
         })
       }
 
-      // Enrich row output – keep input columns and append relationship fields
-      const rel = [String(relationshipCode), relationshipType, rational]
-      outLines.push(line + ',' + rel.join(','))
-      processed++
+          // Enrich row output – keep input columns and append relationship fields
+          const rel = [String(relationshipCode), relationshipType, rational]
+          outLines.push(line + ',' + rel.join(','))
+          processed++
     }
 
     // Write enriched output
