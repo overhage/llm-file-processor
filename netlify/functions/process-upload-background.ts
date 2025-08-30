@@ -157,8 +157,11 @@ function masterKeySnake(m: MasterRecord) {
 }
 
 // ===== LLM classifier (optional) =====
-const OPENAI_MODEL = process.env.OPENAI_MODEL
+const OPENAI_MODEL = (process.env.OPENAI_MODEL ?? 'gpt-4o-mini') as any
 async function classifyRelationship(m: MasterRecord): Promise<Pick<MasterRecord,'REL_TYPE'|'REL_TYPE_T'|'RATIONALE'>> {
+  if (!process.env.OPENAI_API_KEY) {
+    return { REL_TYPE: null, REL_TYPE_T: null, RATIONALE: 'LLM disabled' }
+  }
   try {
     const rsp = await openai.chat.completions.create({
       model: OPENAI_MODEL,
