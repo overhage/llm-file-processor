@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 
 const UPLOADS_STORE = 'uploads';
 // IMPORTANT: for a file named process-upload-background.ts,
-// the invoke URL is /.netlify/functions/process-upload  (no "-background")
+// the invoke URL is /.netlify/functions/process-upload (no "-background")
 const BACKGROUND_FN_PATH = '/.netlify/functions/process-upload';
 
 export async function POST(req: Request) {
@@ -69,17 +69,22 @@ export async function POST(req: Request) {
     try {
       const proto = req.headers.get('x-forwarded-proto') ?? 'https';
       const host = req.headers.get('x-forwarded-host');
-      const base = host ? `${proto}://${host}` : (process.env.URL || '');
-      await fetch(base + BACKGROUND_FN_PATH, {
+      const base =
+        (host ? `${proto}://${host}` : '') ||
+        process.env.URL ||
+        process.env.DEPLOY_PRIME_URL ||
+        '';
+
+      const payload = { jobId, uploadKey, outputKey, classify: true };
+
+      const resp = await fetch(base + BACKGROUND_FN_PATH, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          jobId,
-          uploadKey,   // matches worker param name
-          outputKey,   // matches worker param name
-          classify: true,
-        }),
+        body: JSON.stringify(payload),
       });
+
+      const text = await resp.text().catch(() => '');
+      console.log('process-upload trigger', resp.status, text);
     } catch (e) {
       console.error('process-upload trigger failed', e);
     }

@@ -23,9 +23,9 @@ const prisma = new PrismaClient()
 const db: any = prisma // loosen types at the boundary to avoid schema-name friction
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-export const config = { path: '/.netlify/functions/process-upload-background' }
-
 // ===== Types =====
+
+
 export type MasterRecord = {
   concept_a: number
   code_a: string
@@ -229,6 +229,7 @@ async function writeBlobText(store: any, key: string, text: string): Promise<voi
 
 // ===== Handler =====
 export default async function handler(req: Request) {
+  console.log('process-upload: invoked')
   try {
     if (req.method !== 'POST') return new Response('Method Not Allowed', { status: 405 })
     const { jobId, uploadKey, outputKey, classify = true } = await req.json()
