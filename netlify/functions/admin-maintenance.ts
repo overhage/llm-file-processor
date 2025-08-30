@@ -9,16 +9,19 @@ const UPLOADS_STORE = 'uploads'
 const OUTPUTS_STORE = 'outputs'
 
 // Page through blobs using the iterator API (current @netlify/blobs typing)
+
 async function deleteAllBlobs(storeName: string): Promise<number> {
-  const store = getStore(storeName)
-  let total = 0
+  const { getStore } = await import('@netlify/blobs/dist/main.js'); // <- ESM entry
+  const store = getStore(storeName);
+  let total = 0;
+
   for await (const page of store.list({ paginate: true })) {
     for (const b of page.blobs) {
-      await store.delete(b.key)
-      total++
+      await store.delete(b.key);
+      total++;
     }
   }
-  return total
+  return total;
 }
 
 export default async function handler(req: Request) {
