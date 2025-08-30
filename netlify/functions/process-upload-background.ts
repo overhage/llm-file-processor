@@ -1,11 +1,19 @@
 // netlify/functions/process-upload-background.ts
 
 // Netlify Blobs
-const { getStore } = await import('@netlify/blobs/dist/main.js')
 const UPLOADS_STORE = process.env.UPLOADS_STORE ?? 'uploads'
 const OUTPUTS_STORE = process.env.OUTPUTS_STORE ?? 'outputs'
-const uploads = getStore(UPLOADS_STORE)
-const outputs = getStore(OUTPUTS_STORE)
+let uploads: any
+let outputs: any
+async function ensureStores() {
+  if (!uploads || !outputs) {
+    const mod: any = await import('@netlify/blobs')
+    const getStore = mod.getStore ?? mod.default?.getStore
+    if (!getStore) throw new Error('Netlify Blobs getStore not found')
+    uploads = getStore(UPLOADS_STORE)
+    outputs = getStore(OUTPUTS_STORE)
+  }
+}
 
 // Prisma + OpenAI
 import { PrismaClient } from '@prisma/client'
@@ -214,6 +222,7 @@ export default async function handler(req: Request) {
     // job mark running (best-effort)
     try { await db.job.update({ where: { id: jobId }, data: { status: 'running', started_at: new Date() } }) } catch {}
 
+    await ensureStores()
     const csv = await readBlobText(uploads, uploadKey)
     const rows = await parseCsv(csv)
 
