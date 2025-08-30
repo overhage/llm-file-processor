@@ -232,11 +232,14 @@ export default async function handler(req: Request) {
   console.log('process-upload: invoked')
   try {
     if (req.method !== 'POST') return new Response('Method Not Allowed', { status: 405 })
+    console.log('process-upload: req.method was POST')
     const { jobId, uploadKey, outputKey, classify = true } = await req.json()
     if (!uploadKey || !outputKey) throw new Error('uploadKey and outputKey required')
+    console.log('process-upload: uploadkey and outputKey present')
 
     // job mark running (best-effort)
     try { await db.job.update({ where: { id: jobId }, data: { status: 'running', started_at: new Date() } }) } catch {}
+    console.log('process-upload: marked job as running')
 
     await ensureStores()
     const csv = await readBlobText(uploads, uploadKey)
