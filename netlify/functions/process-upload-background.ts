@@ -212,8 +212,20 @@ async function upsertMaster(m: MasterRecord) {
 async function finalizeMasterSnapshot() { /* no-op */ }
 
 // ===== Netlify Blobs helpers =====
-async function readBlobText(store: any, key: string): Promise<string> { const res = await store.get(key); if (!res) throw new Error(`Blob not found: ${key}`); return await res.text() }
-async function writeBlobText(store: any, key: string, text: string): Promise<void> { await store.set(key, text, { access: 'public', contentType: 'text/csv' }) }
+async function readBlobText(store: any, key: string): Promise<string> {
+  const res = await store.get(key)
+  if (!res) throw new Error(`Blob not found: ${key}`)
+  return await res.text()
+}
+
+async function writeBlobText(store: any, key: string, text: string): Promise<void> {
+  // Add BOM + explicit charset so Excel opens UTF-8 correctly
+  await store.set(key, `\ufeff${text}`, {
+    access: 'public',
+    contentType: 'text/csv; charset=utf-8',
+  })
+}
+
 
 // ===== Handler =====
 export default async function handler(req: Request) {

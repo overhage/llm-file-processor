@@ -5,23 +5,22 @@ import { PrismaClient } from '@prisma/client'
 const prisma = new PrismaClient()
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN
 
-const UPLOADS_STORE = 'uploads'
-const OUTPUTS_STORE = 'outputs'
+const UPLOADS_STORE = process.env.UPLOADS_STORE ?? 'uploads'
+const OUTPUTS_STORE = process.env.OUTPUTS_STORE ?? 'outputs'
 
-// Page through blobs using the iterator API (current @netlify/blobs typing)
-
+// Delete every blob in a store using typed async-iterator pagination
 async function deleteAllBlobs(storeName: string): Promise<number> {
-  const { getStore } = await import('@netlify/blobs/dist/main.js'); // <- ESM entry
-  const store = getStore(storeName);
-  let total = 0;
+  const store = getStore(storeName)
+  let total = 0
 
   for await (const page of store.list({ paginate: true })) {
     for (const b of page.blobs) {
-      await store.delete(b.key);
-      total++;
+      await store.delete(b.key)
+      total++
     }
   }
-  return total;
+
+  return total
 }
 
 export default async function handler(req: Request) {
@@ -29,7 +28,7 @@ export default async function handler(req: Request) {
     return new Response('Method Not Allowed', { status: 405 })
   }
 
-  // bearer auth
+  // Bearer auth
   const auth = req.headers.get('authorization') || ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
   if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) {
