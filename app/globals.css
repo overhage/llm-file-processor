@@ -1,0 +1,4 @@
+/* app/globals.css */
+:root { color-scheme: light dark; }
+html, body { margin: 0; padding: 0; }
+* { box-sizing: border-box; }
