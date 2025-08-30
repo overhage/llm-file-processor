@@ -1,4 +1,5 @@
-// app/api/uploads/route.ts
+//app/api/uploads/route.ts
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -11,9 +12,8 @@ import { authOptions } from '@/lib/auth';
 import crypto from 'node:crypto';
 
 const UPLOADS_STORE = 'uploads';
-// IMPORTANT: for a file named process-upload-background.ts,
-// the invoke URL is /.netlify/functions/process-upload (no "-background")
-const BACKGROUND_FN_PATH = '/.netlify/functions/process-upload';
+// the invoke URL is /.netlify/functions/process-upload-background
+const BACKGROUND_FN_PATH = '/.netlify/functions/process-upload-background';
 
 export async function POST(req: Request) {
   try {
