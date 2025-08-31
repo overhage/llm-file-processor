@@ -57,31 +57,31 @@ export async function POST(req: Request) {
       select: { id: true },
     })
 
-    // --- save file to Netlify Blobs (robust) ---
-    try {
-      const uploadStore = getStore({ name: UPLOADS_STORE })
-      // support both signatures depending on library version
-      let uploadStore: any
-      try { uploadStore = getStore(UPLOADS_STORE) } catch { uploadStore = getStore({ name: UPLOADS_STORE }) }
+// --- save file to Netlify Blobs (robust) ---
+try {
+  const getStore = await loadGetStore()
 
-      // Convert File -> Buffer (avoids streaming quirks)
-      const buf = Buffer.from(await (file as File).arrayBuffer())
+  // Use a single, consistent signature everywhere
+  const uploadStore = getStore({ name: UPLOADS_STORE })
 
-      await uploadStore.set(uploadKey, buf, {
-        access: 'private',
-        contentType: 'text/csv; charset=utf-8',
-        metadata: { originalName, userId, jobId },
-      })
+  // Convert File -> Buffer (avoids streaming quirks)
+  const buf = Buffer.from(await (file as File).arrayBuffer())
 
-      // Verify write immediately so we fail fast if not visible
-      const verify = await uploadStore.get(uploadKey)
-            const exists = !!verify
-console.log('upload: saved', { uploadKey, exists, UPLOADS_STORE })
-      if (!exists) throw new Error(`Upload blob not visible after set: ${uploadKey}`)
-    } catch (e) {
-      console.error('upload: blob write failed', e)
-      throw e
-    }
+  await uploadStore.set(uploadKey, buf, {
+    access: 'private',
+    contentType: 'text/csv; charset=utf-8',
+    metadata: { originalName, userId, jobId },
+  })
+
+  // Verify write immediately so we fail fast if not visible
+  const verify = await uploadStore.get(uploadKey)
+  const exists = !!verify
+  console.log('upload: saved', { uploadKey, exists, UPLOADS_STORE })
+  if (!exists) throw new Error(`Upload blob not visible after set: ${uploadKey}`)
+} catch (e) {
+  console.error('upload: blob write failed', e)
+  throw e
+}
 
     // --- create Job (queued) ---
     await prisma.job.create({
@@ -116,6 +116,7 @@ console.log('upload: saved', { uploadKey, exists, UPLOADS_STORE })
       })
 
       const payload = { jobId, uploadKey, outputKey, classify: true }
+
       // small handoff delay to allow cross-runtime visibility
       await new Promise(r => setTimeout(r, 1500))
 
