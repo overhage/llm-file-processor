@@ -66,18 +66,17 @@ export async function POST(req: Request) {
 
       // Convert File -> Buffer (avoids streaming quirks)
       const buf = Buffer.from(await (file as File).arrayBuffer())
-      console.log('upload: will save blob', { uploadKey })
+
       await uploadStore.set(uploadKey, buf, {
         access: 'private',
         contentType: 'text/csv; charset=utf-8',
         metadata: { originalName, userId, jobId },
       })
-      console.log('upload: saved', { uploadKey, exists })
+
       // Verify write immediately so we fail fast if not visible
       const verify = await uploadStore.get(uploadKey)
-      const exists = !!verify
-      console.log('upload: saved', { uploadKey, exists, UPLOADS_STORE })
-      if (!exists) throw new Error(`Upload blob not visible after set: ${uploadKey}`)
+      $1
+console.log('upload: saved', { uploadKey, exists, UPLOADS_STORE })if (!exists) throw new Error(`Upload blob not visible after set: ${uploadKey}`)
     } catch (e) {
       console.error('upload: blob write failed', e)
       throw e
