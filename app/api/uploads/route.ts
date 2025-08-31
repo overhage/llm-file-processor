@@ -59,7 +59,7 @@ export async function POST(req: Request) {
 
     // --- save file to Netlify Blobs (robust) ---
     try {
-      const getStore = await loadGetStore()
+      const uploadStore = getStore({ name: UPLOADS_STORE })
       // support both signatures depending on library version
       let uploadStore: any
       try { uploadStore = getStore(UPLOADS_STORE) } catch { uploadStore = getStore({ name: UPLOADS_STORE }) }
@@ -116,6 +116,8 @@ console.log('upload: saved', { uploadKey, exists, UPLOADS_STORE })
       })
 
       const payload = { jobId, uploadKey, outputKey, classify: true }
+      // small handoff delay to allow cross-runtime visibility
+      await new Promise(r => setTimeout(r, 1500))
 
       const resp = await fetch(base + BACKGROUND_FN_PATH, {
         method: 'POST',

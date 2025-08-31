@@ -16,8 +16,8 @@ async function ensureStores() {
 
   // Try string signature first, then object signature as fallback
   try {
-    uploads = getStore(UPLOADS_STORE)
-    outputs = getStore(OUTPUTS_STORE)
+    uploads = getStore({ name: UPLOADS_STORE })
+    outputs = getStore({ name: OUTPUTS_STORE })
   } catch (e1) {
     console.log('process-upload: getStore(string) failed, retrying with object signature', String(e1))
     uploads = getStore({ name: UPLOADS_STORE })
@@ -42,9 +42,25 @@ async function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
 // bump retries to ~25 with a modest backoff (~15s total)
 async function readBlobTextWithRetry(store: any, key: string, tries = 25): Promise<string> {
+  const userPrefix = uploadKey.includes('/') ? uploadKey.split('/')[0] + '/' : ''
   let lastErr: any = null
   for (let i = 0; i < tries; i++) {
     try {
+      if (i % 5 === 4 && userPrefix) {
+        try {
+          let listed = 0
+          for await (const page of store.list({ prefix: userPrefix, limit: 50, paginate: true })) {
+            for (const b of page.blobs) {
+              listed++
+              if (listed <= 5) console.log('process-upload: visible key', b.key)
+            }
+            break // only first page needed
+          }
+          console.log('process-upload: visible count (first page)', listed)
+        } catch (e) {
+          console.log('process-upload: list with prefix failed', String(e))
+        }
+      }
       const res = await store.get(key)
       if (res) {
         const text = await res.text()
