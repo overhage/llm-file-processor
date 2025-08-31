@@ -10,11 +10,11 @@
     "@prisma/client": "latest",
     "csv-parse": "^5.5.0",
     "csv-stringify": "^6.5.0",
-    "next": "^14.2.5",
+    "next": "14",
     "next-auth": "^4",
     "openai": "^4.55.0",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "zod": "^4.1.3"
   },
   "devDependencies": {

@@ -75,8 +75,9 @@ export async function POST(req: Request) {
 
       // Verify write immediately so we fail fast if not visible
       const verify = await uploadStore.get(uploadKey)
-      $1
-console.log('upload: saved', { uploadKey, exists, UPLOADS_STORE })if (!exists) throw new Error(`Upload blob not visible after set: ${uploadKey}`)
+            const exists = !!verify
+console.log('upload: saved', { uploadKey, exists, UPLOADS_STORE })
+      if (!exists) throw new Error(`Upload blob not visible after set: ${uploadKey}`)
     } catch (e) {
       console.error('upload: blob write failed', e)
       throw e
