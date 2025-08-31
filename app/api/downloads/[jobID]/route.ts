@@ -1,65 +1,58 @@
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
+// app/api/downloads/[id]/route.ts
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
-import { getStore } from '@netlify/blobs';
-import { prisma } from '@/lib/db';
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/db'
 
-const OUTPUTS_STORE = 'outputs';
+const OUTPUTS_STORE = process.env.OUTPUTS_STORE ?? 'outputs'
 
-// Minimal shape we need from blobs.list()
-type BlobListPage = { blobs: { key: string }[] };
+export async function GET(_req: Request, ctx: { params: { jobId: string } }) {
+  const jobId = ctx?.params?.jobId
+  if (!jobId) return new Response('Missing job id', { status: 400 })
 
-export async function GET(
-  _req: Request,
-  { params }: { params: Record<string, string> }
-) {
-  const jobId = params.jobId ?? params.jobID; // tolerate old folder name
-  if (!jobId) return new Response('Missing jobId', { status: 400 });
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.email) return new Response('Unauthorized', { status: 401 })
 
-  const outputs = getStore(OUTPUTS_STORE);
-  let outputBlobKey: string | null = null;
+  const me = await prisma.user.findUnique({
+    where: { email: session.user.email },
+    select: { id: true },
+  })
+  if (!me) return new Response('Unauthorized', { status: 401 })
 
-  // 1) Prefer DB lookup
-  try {
-    const job = await prisma.job.findUnique({
-      where: { id: jobId },
-      select: { outputBlobKey: true },
-    });
-    outputBlobKey = job?.outputBlobKey ?? null;
-  } catch (e) {
-    console.error('Download: Prisma lookup failed; falling back to blobs list()', e);
-  }
+  // Look up the job and ensure it belongs to the caller
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    select: { userId: true, status: true, outputBlobKey: true, upload: { select: { originalName: true } } },
+  })
 
-  // 2) Fallback: scan blobs via async iterator (typed with our minimal shape)
-  if (!outputBlobKey) {
-    try {
-      const iterable = outputs.list({ paginate: true }) as unknown as AsyncIterable<BlobListPage>;
-      for await (const page of iterable) {
-        const match = page.blobs.find(
-          b => b.key === `${jobId}.csv` || b.key.endsWith(`/${jobId}.csv`)
-        );
-        if (match) {
-          outputBlobKey = match.key;
-          break;
-        }
-      }
-    } catch (e) {
-      console.error('Download: list() failed', e);
-    }
-  }
+  if (!job || job.userId !== me.id) return new Response('Not found', { status: 404 })
+  if (job.status !== 'completed') return new Response('Not ready', { status: 409 })
+  if (!job.outputBlobKey) return new Response('No output for this job', { status: 404 })
 
-  if (!outputBlobKey) return new Response('Not ready', { status: 404 });
+  // Read the CSV from Netlify Blobs
+  const mod: any = await import('@netlify/blobs')
+  const getStore = mod.getStore ?? mod.default?.getStore
+  if (!getStore) return new Response('Storage unavailable', { status: 500 })
 
-  // 3) Return CSV
-  const data = await outputs.get(outputBlobKey); // string | Uint8Array | null
-  if (data == null) return new Response('Output missing', { status: 404 });
+  const outputs = getStore({ name: OUTPUTS_STORE, consistency: 'strong' })
+  const ab: ArrayBuffer | null = await outputs.get(job.outputBlobKey, { type: 'arrayBuffer', consistency: 'strong' })
+  if (!ab) return new Response('Output not found', { status: 404 })
 
-  return new Response(data as any, {
+  const body = new Uint8Array(ab)
+
+  // Nice filename: use original upload base + ".processed.csv"
+  const base = job.upload?.originalName?.replace(/\.[^./]+$/, '') || 'output'
+  const filename = `${base}.processed.csv`
+
+  return new Response(body, {
+    status: 200,
     headers: {
-      'content-type': 'text/csv; charset=utf-8',
-      'content-disposition': `attachment; filename="job-${jobId}.csv"`,
-      'cache-control': 'no-store',
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'no-store, max-age=0',
     },
-  });
+  })
 }

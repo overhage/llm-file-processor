@@ -364,6 +364,23 @@ export default async function handler(req: Request) {
     }
     await writeBlobText(outputs, outputKey, lines.join(NL))
 
+    // Persist output location and row counts for the download route/UI
+    try {
+      if (jobId) {
+        await prisma.job.update({
+          where: { id: jobId },
+          data: {
+            outputBlobKey: outputKey,
+            rowsTotal: rows.length,
+            rowsProcessed: out.length,
+          },
+        })
+      }
+    } catch (e) {
+      console.warn('process-upload: failed to persist outputBlobKey/rows', String(e))
+    }
+
+
     // Success stamp (best-effort)
     try {
       if (jobId) {
