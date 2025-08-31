@@ -243,14 +243,20 @@ export default async function handler(req: Request) {
 
     await ensureStores()
     const csv = await readBlobText(uploads, uploadKey)
+    console.log('process-upload: blob read')
     const rows = await parseCsv(csv)
+    console.log('process-upload: csv parsed')
 
     const out: MasterRecord[] = []
     let calls = 0
+
     for (const r of rows) {
+      console.log('process-upload: processing row')
       const m = mergeCountsAndCompute(r)
+      console.log('process-upload: merge counts and compute complete')
       if (classify && calls < Number(process.env.LLM_MAX_CALLS_PER_JOB ?? '50')) {
         const rel = await classifyRelationship(m)
+        console.log('process-upload: classify complete')
         Object.assign(m, rel)
         calls++
       }
@@ -260,6 +266,7 @@ export default async function handler(req: Request) {
     }
 
     await finalizeMasterSnapshot()
+    console.log('process-upload: Master snapshot finalized')
 
     // Output CSV
     const header = [
