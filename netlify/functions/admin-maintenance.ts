@@ -1,5 +1,16 @@
 // netlify/functions/admin-maintenance.ts
-import { getStore } from '@netlify/blobs'
+
+// Dynamically load Netlify Blobs to avoid CJS->ESM require() issues.
+let cachedGetStore: any
+async function loadGetStore() {
+  if (!cachedGetStore) {
+    const mod: any = await import('@netlify/blobs')
+    cachedGetStore = mod.getStore ?? mod.default?.getStore
+    if (!cachedGetStore) throw new Error('Netlify Blobs getStore not found')
+  }
+  return cachedGetStore
+}
+
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -10,6 +21,7 @@ const OUTPUTS_STORE = process.env.OUTPUTS_STORE ?? 'outputs'
 
 // Delete every blob in a store using typed async-iterator pagination
 async function deleteAllBlobs(storeName: string): Promise<number> {
+  const getStore = await loadGetStore()
   const store = getStore(storeName)
   let total = 0
 
@@ -19,7 +31,6 @@ async function deleteAllBlobs(storeName: string): Promise<number> {
       total++
     }
   }
-
   return total
 }
 
