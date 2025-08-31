@@ -243,7 +243,7 @@ async function incrementSourceCount(m: MasterRecord) {
 
 async function upsertMaster(m: MasterRecord) {
   const where = masterKeySnake(m)
-  const data = {
+  const data: any = {
     cooc_obs: m.cooc_obs,
     nA: m.nA,
     nB: m.nB,
@@ -256,11 +256,18 @@ async function upsertMaster(m: MasterRecord) {
     lift_upper_95: m.lift_upper_95,
     z_score: m.z_score,
     dir_prop_a_before_b: m.directionality_ratio,
-    relationshipType: m.REL_TYPE,
-    rational: m.RATIONALE,
+    rational: m.RATIONALE ?? undefined,
   }
+  // Only include relationshipType if we actually have a non-empty value; Prisma rejects explicit nulls.
+  if (m.REL_TYPE && m.REL_TYPE.trim().length > 0) {
+    data.relationshipType = m.REL_TYPE.trim()
+  }
+
   const res = await (prisma as any).masterRecord.updateMany({ where, data })
-  if (res.count === 0) { await (prisma as any).masterRecord.create({ data: { ...where, ...data, source_count: 1 } }) }
+  if (res.count === 0) {
+    const createData: any = { ...where, ...data, source_count: 1 }
+    await (prisma as any).masterRecord.create({ data: createData })
+  }
 }
 
 async function finalizeMasterSnapshot() { /* no-op for now */ }
