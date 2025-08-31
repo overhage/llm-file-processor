@@ -6,7 +6,7 @@
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.10.0",
-    "@netlify/blobs": "^10.0.8",
+    "@netlify/blobs": "^10.0.10",
     "@prisma/client": "latest",
     "csv-parse": "^5.5.0",
     "csv-stringify": "^6.5.0",
