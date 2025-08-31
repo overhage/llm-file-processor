@@ -42,29 +42,15 @@ async function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
 // bump retries to ~25 with a modest backoff (~15s total)
 async function readBlobTextWithRetry(store: any, key: string, tries = 25): Promise<string> {
-  const userPrefix = uploadKey.includes('/') ? uploadKey.split('/')[0] + '/' : ''
+  const userPrefix = key.includes('/') ? key.split('/')[0] + '/' : ''
   let lastErr: any = null
+
   for (let i = 0; i < tries; i++) {
     try {
-      if (i % 5 === 4 && userPrefix) {
-        try {
-          let listed = 0
-          for await (const page of store.list({ prefix: userPrefix, limit: 50, paginate: true })) {
-            for (const b of page.blobs) {
-              listed++
-              if (listed <= 5) console.log('process-upload: visible key', b.key)
-            }
-            break // only first page needed
-          }
-          console.log('process-upload: visible count (first page)', listed)
-        } catch (e) {
-          console.log('process-upload: list with prefix failed', String(e))
-        }
-      }
       const res = await store.get(key)
       if (res) {
         const text = await res.text()
-        if (text?.length) return text
+        if (text && text.length) return text
         throw new Error(`Blob empty: ${key}`)
       } else {
         lastErr = new Error(`Blob not found: ${key}`)
@@ -72,12 +58,32 @@ async function readBlobTextWithRetry(store: any, key: string, tries = 25): Promi
     } catch (e) {
       lastErr = e
     }
-    const delay = 200 + i * 200 // 200ms, 400ms, … ~5s on later attempts
+
+    // every 5th attempt, list a few keys under the same user prefix to see visibility
+    if ((i + 1) % 5 === 0 && userPrefix) {
+      try {
+        let listed = 0
+        for await (const page of store.list({ prefix: userPrefix, limit: 50, paginate: true })) {
+          for (const b of page.blobs) {
+            listed++
+            if (listed <= 5) console.log('process-upload: visible key', b.key)
+          }
+          break // first page enough for diagnostics
+        }
+        console.log('process-upload: visible count (first page)', listed)
+      } catch (e) {
+        console.log('process-upload: list with prefix failed', String(e))
+      }
+    }
+
+    const delay = 200 + i * 200 // 200ms, 400ms, … (~5s later attempts)
     console.log(`process-upload: blob not ready (attempt ${i + 1}/${tries}) – sleeping ${delay}ms`)
     await new Promise(r => setTimeout(r, delay))
   }
+
   throw lastErr ?? new Error(`Blob not found after ${tries} tries: ${key}`)
 }
+
 
 
 
