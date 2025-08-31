@@ -6,14 +6,62 @@ const OUTPUTS_STORE = process.env.OUTPUTS_STORE ?? 'outputs'
 let uploads: any
 let outputs: any
 async function ensureStores() {
-  if (!uploads || !outputs) {
-    const mod: any = await import('@netlify/blobs')
-    const getStore = mod.getStore ?? mod.default?.getStore
-    if (!getStore) throw new Error('Netlify Blobs getStore not found')
+  if (uploads && outputs) return
+  console.log('process-upload: ensureStores() starting', {
+    UPLOADS_STORE, OUTPUTS_STORE, node: process.version
+  })
+  const mod: any = await import('@netlify/blobs')
+  const getStore = mod.getStore ?? mod.default?.getStore
+  if (!getStore) throw new Error('Netlify Blobs getStore not found')
+
+  // Try string signature first, then object signature as fallback
+  try {
     uploads = getStore(UPLOADS_STORE)
     outputs = getStore(OUTPUTS_STORE)
+  } catch (e1) {
+    console.log('process-upload: getStore(string) failed, retrying with object signature', String(e1))
+    uploads = getStore({ name: UPLOADS_STORE })
+    outputs = getStore({ name: OUTPUTS_STORE })
   }
+
+  // Sanity logs
+  try {
+    // fetch at least one page to prove the client works
+    for await (const page of uploads.list({ limit: 1, paginate: true })) {
+      console.log('process-upload: uploads.list sample ok', page?.blobs?.[0]?.key ?? '(none)')
+      break
+    }
+  } catch (e2) {
+    console.log('process-upload: uploads.list failed', String(e2))
+  }
+  console.log('process-upload: ensureStores() done')
 }
+
+
+async function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
+
+async function readBlobTextWithRetry(store: any, key: string, tries = 8): Promise<string> {
+  let lastErr: any = null
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await store.get(key)
+      if (res) {
+        const text = await res.text()
+        if (text && text.length) return text
+        throw new Error(`Blob empty: ${key}`)
+      } else {
+        lastErr = new Error(`Blob not found: ${key}`)
+      }
+    } catch (e) {
+      lastErr = e
+    }
+    const delay = 150 * (i + 1) // 150ms, 300ms, … ~1.2s total
+    console.log(`process-upload: blob not ready (attempt ${i + 1}/${tries}) – sleeping ${delay}ms`)
+    await sleep(delay)
+  }
+  throw lastErr ?? new Error(`Blob not found after ${tries} tries: ${key}`)
+}
+
 
 // Prisma + OpenAI
 import { PrismaClient } from '@prisma/client'
@@ -242,8 +290,11 @@ export default async function handler(req: Request) {
     console.log('process-upload: marked job as running')
 
     await ensureStores()
-    const csv = await readBlobText(uploads, uploadKey)
-    console.log('process-upload: blob read')
+    console.log('process-upload: stores ensured', { uploadKey })
+    const csv = await readBlobTextWithRetry(uploads, uploadKey)
+    console.log('process-upload: blob read (len)', csv.length)
+
+
     const rows = await parseCsv(csv)
     console.log('process-upload: csv parsed')
 
