@@ -5,7 +5,6 @@ export const revalidate = 0;
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import SiteNav from "@/components/SiteNav";
 import AutoRefresh from "@/components/AutoRefresh";
@@ -79,11 +78,16 @@ export default async function JobsPage() {
                 {(j.rowsTotal ?? 0).toLocaleString()}
               </td>
               <td>
-                {j.status === "completed" ? (
-                  <Link href={`/api/downloads/${j.id}`}>Download</Link>
-                ) : (
-                  <span style={{ color: "#888" }}>—</span>
-                )}
+                {j.status === 'completed' ? (
+                  <a
+                    href={`/api/downloads/${j.id}`}
+                    className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium border border-neutral-300 hover:bg-neutral-50"
+                  >
+                   Download CSV
+                  </a>
+                 ) : (
+                  <span className="text-neutral-500">—</span>
+                 )}
               </td>
             </tr>
           ))}

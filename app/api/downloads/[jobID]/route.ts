@@ -9,8 +9,9 @@ import { prisma } from '@/lib/db'
 
 const OUTPUTS_STORE = process.env.OUTPUTS_STORE ?? 'outputs'
 
-export async function GET(_req: Request, ctx: { params: { jobId: string } }) {
-  const jobId = ctx?.params?.jobId
+export async function GET(req: Request, ctx: { params: { id?: string; jobId?: string } }) {
+  const url = new URL(req.url)
+  const jobId = ctx?.params?.id || ctx?.params?.jobId || url.searchParams.get('id') || url.searchParams.get('jobId')
   if (!jobId) return new Response('Missing job id', { status: 400 })
 
   const session = await getServerSession(authOptions)
