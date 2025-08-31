@@ -245,8 +245,8 @@ async function upsertMaster(m: MasterRecord) {
   const where = masterKeySnake(m)
   const data = {
     cooc_obs: m.cooc_obs,
-    n_a: m.nA,
-    n_b: m.nB,
+    nA: m.nA,
+    nB: m.nB,
     total_persons: m.total_persons,
     cooc_event_count: m.cooc_event_count,
     a_before_b: m.a_before_b,
@@ -255,10 +255,9 @@ async function upsertMaster(m: MasterRecord) {
     lift_lower_95: m.lift_lower_95,
     lift_upper_95: m.lift_upper_95,
     z_score: m.z_score,
-    directionality_ratio: m.directionality_ratio,
-    rel_type: m.REL_TYPE,
-    rel_type_t: m.REL_TYPE_T,
-    rationale: m.RATIONALE,
+    dir_prop_a_before_b: m.directionality_ratio,
+    relationshipType: m.REL_TYPE,
+    rational: m.RATIONALE,
   }
   const res = await (prisma as any).masterRecord.updateMany({ where, data })
   if (res.count === 0) { await (prisma as any).masterRecord.create({ data: { ...where, ...data, source_count: 1 } }) }
