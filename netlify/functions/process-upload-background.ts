@@ -83,10 +83,10 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 // ===================== Types =====================
 export type MasterRecord = {
-  concept_a: number
+  concept_a: string
   code_a: string
   system_a: string
-  concept_b: number
+  concept_b: string
   code_b: string
   system_b: string
   // input counts
@@ -110,9 +110,9 @@ export type MasterRecord = {
 }
 
 export type UploadRow = {
-  concept_a: number | string
+  concept_a: string | string
   code_a: string
-  concept_b: number | string
+  concept_b: string | string
   code_b: string
   system_a: string
   system_b: string
@@ -199,8 +199,8 @@ function computeStats(row: MasterRecord): MasterRecord {
 
 function mergeCountsAndCompute(row: UploadRow): MasterRecord {
   const m: MasterRecord = {
-    concept_a: num(row.concept_a), code_a: s(row.code_a), system_a: s(row.system_a),
-    concept_b: num(row.concept_b), code_b: s(row.code_b), system_b: s(row.system_b),
+    concept_a: s(row.concept_a), code_a: s(row.code_a), system_a: s(row.system_a),
+    concept_b: s(row.concept_b), code_b: s(row.code_b), system_b: s(row.system_b),
     cooc_obs: num(row.cooc_obs), nA: num(row.nA), nB: num(row.nB), total_persons: num(row.total_persons), cooc_event_count: num(row.cooc_event_count), a_before_b: num(row.a_before_b),
     REL_TYPE: null, REL_TYPE_T: null, RATIONALE: null,
   }
@@ -208,7 +208,7 @@ function mergeCountsAndCompute(row: UploadRow): MasterRecord {
 }
 
 function masterKeySnake(m: MasterRecord) {
-  return { concept_a: m.concept_a, concept_b: m.concept_b, code_a: trimLen(m.code_a,64), code_b: trimLen(m.code_b,64), system_a: trimLen(m.system_a,32), system_b: trimLen(m.system_b,32) }
+  return { concept_a: trimLen(m.concept_a,64), concept_b: trimLen(m.concept_b,64), code_a: trimLen(m.code_a,64), code_b: trimLen(m.code_b,64), system_a: trimLen(m.system_a,32), system_b: trimLen(m.system_b,32) }
 }
 
 // ===================== LLM classifier =====================
@@ -222,7 +222,7 @@ async function classifyRelationship(m: MasterRecord): Promise<Pick<MasterRecord,
       model: OPENAI_MODEL,
       messages: [
         { role: 'system', content: 'You are a concise clinical reviewer. Return JSON only.' },
-        { role: 'user', content: `Return JSON with REL_TYPE, REL_TYPE_T, RATIONALE for {concept_a:${m.concept_a}, code_a:"${m.code_a}", concept_b:${m.concept_b}, code_b:"${m.code_b}"}` },
+        { role: 'user', content: `Return JSON with REL_TYPE, REL_TYPE_T, RATIONALE for {concept_a:"${m.concept_a}", code_a:"${m.code_a}", concept_b:"${m.concept_b}", code_b:"${m.code_b}"}` },
       ],
       temperature: 0,
     })
