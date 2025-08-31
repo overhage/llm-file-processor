@@ -1,7 +1,5 @@
 // netlify/functions/process-upload-background.ts
 
-
-
 // ===================== Netlify Blobs =====================
 const UPLOADS_STORE = process.env.UPLOADS_STORE ?? 'uploads'
 const OUTPUTS_STORE = process.env.OUTPUTS_STORE ?? 'outputs'
@@ -17,16 +15,14 @@ async function ensureStores() {
   const getStore = mod.getStore ?? mod.default?.getStore
   if (!getStore) throw new Error('Netlify Blobs getStore not found')
 
-  // Use the object signature consistently across runtimes/SDK versions
-  uploads = getStore({ name: UPLOADS_STORE })
-  outputs = getStore({ name: OUTPUTS_STORE })
+  // Use the object signature with strong consistency to avoid eventual-read races
+  uploads = getStore({ name: UPLOADS_STORE, consistency: 'strong' })
+  outputs = getStore({ name: OUTPUTS_STORE, consistency: 'strong' })
 
-  // Sanity: try one page
+  // sanity log
   try {
-    for await (const page of uploads.list({ limit: 1, paginate: true })) {
-      console.log('process-upload: uploads.list sample ok', page?.blobs?.[0]?.key ?? '(none)')
-      break
-    }
+    const sample = await uploads.list({ limit: 1 })
+    console.log('process-upload: uploads.list sample ok', sample?.blobs?.[0]?.key)
   } catch (e: any) {
     console.log('process-upload: uploads.list failed', String(e))
   }
@@ -36,71 +32,46 @@ async function ensureStores() {
 // ===================== Helpers =====================
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// Strong, diagnostic reader with signed-URL fallback
-async function readBlobTextWithRetry(store: any, key: string, tries = 40): Promise<string> {
-  const userPrefix = key.includes('/') ? key.split('/')[0] + '/' : ''
-  let lastErr: any = null
-
+// Strong, diagnostic reader (no signed-URL; uses strong reads)
+async function readBlobTextWithRetry(
+  store: any,
+  key: string,
+  tries = 40
+): Promise<string> {
   console.log('process-upload: reading key', { keyRaw: key, keyDebug: JSON.stringify(key) })
+  let lastErr: unknown = null
 
-  for (let i = 0; i < tries; i++) {
+  // backoff starts at 200ms, grows by 250ms, caps at 5s
+  for (let i = 0, delay = 200; i < tries; i++, delay = Math.min(delay + 250, 5000)) {
     try {
-      // Primary: direct get()
-      const res = await store.get(key)
-      if (res) {
-        const txt = await res.text()
-        if (txt?.length) return txt
-        lastErr = new Error(`Blob empty: ${key}`)
-      } else {
-        lastErr = new Error(`Blob not found by get(): ${key}`)
+      const text = await store.get(key, { type: 'text', consistency: 'strong' })
+      if (typeof text === 'string' && text.length > 0) {
+        return text
       }
+      lastErr = new Error(`Blob empty or unexpected type for ${key}`)
     } catch (e) {
       lastErr = e
     }
 
-    // Every 5th attempt, list by prefix and try a signed URL if the key is visible
-    if ((i + 1) % 5 === 0 && userPrefix) {
+    // visibility diagnostics every ~4 tries
+    if (i % 4 === 0) {
       try {
-        let visible = false
-        let count = 0
-        for await (const page of store.list({ prefix: userPrefix, limit: 50, paginate: true })) {
-          for (const b of page.blobs) {
-            count++
-            if (count <= 5) console.log('process-upload: visible key', b.key)
-            if (b.key === key) visible = true
-          }
-          break // first page is enough
-        }
-        console.log('process-upload: visible count (first page)', count, 'visibleMatch', visible)
-
-        if (visible) {
-          try {
-            const url = await store.getSignedUrl(key, { method: 'GET', expiresIn: 60 })
-            const r = await fetch(url)
-            console.log('process-upload: signed GET status', r.status)
-            if (r.ok) {
-              const txt = await r.text()
-              if (txt?.length) return txt
-              lastErr = new Error(`Signed URL empty body: ${key}`)
-            } else {
-              lastErr = new Error(`Signed URL fetch failed ${r.status}: ${key}`)
-            }
-          } catch (e) {
-            console.log('process-upload: signed URL fetch error', String(e))
-            lastErr = e
-          }
-        }
-      } catch (e) {
-        console.log('process-upload: list with prefix failed', String(e))
+        const { blobs = [] } = await store.list({ prefix: key, limit: 1 })
+        const visibleMatch = blobs[0]?.key === key
+        console.log('process-upload: visible key', key)
+        console.log('process-upload: visible count (first page)', blobs.length, 'visibleMatch', visibleMatch)
+      } catch {
+        // ignore
       }
     }
 
-    const delay = Math.min(5000, 200 + i * 250) // ramp to ~5s
     console.log(`process-upload: blob not ready (attempt ${i + 1}/${tries}) – sleeping ${delay}ms`)
     await sleep(delay)
   }
 
-  throw lastErr ?? new Error(`Blob not found after ${tries} tries: ${key}`)
+  const msg = `Timed out waiting for blob to become readable: ${key}. Last error: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`
+  console.error('process-upload:', msg)
+  throw new Error(msg)
 }
 
 // ===================== Prisma + OpenAI =====================
@@ -296,12 +267,6 @@ async function upsertMaster(m: MasterRecord) {
 async function finalizeMasterSnapshot() { /* no-op for now */ }
 
 // ===================== Netlify Blobs thin wrappers =====================
-async function readBlobText(store: any, key: string): Promise<string> {
-  const res = await store.get(key)
-  if (!res) throw new Error(`Blob not found: ${key}`)
-  return await res.text()
-}
-
 async function writeBlobText(store: any, key: string, text: string): Promise<void> {
   // Add BOM + explicit charset so Excel opens UTF-8 correctly
   await store.set(key, `\ufeff${text}`, {
@@ -405,10 +370,9 @@ export default async function handler(req: Request) {
 
     return new Response(JSON.stringify({ ok: true, records: out.length }), { status: 200 })
 
- } catch (err: any) {
-  const failureMsg = String(err?.message ?? err)
-  console.error('process-upload ERROR', { failureMsg, jobId, uploadKey })
-
+  } catch (err) {
+    const failureMsg = `process-upload failed: ${err instanceof Error ? err.message : String(err)}`
+    console.error('process-upload:', failureMsg)
 
     // Best-effort failure stamp so the UI shows the cause
     try {
@@ -419,9 +383,9 @@ export default async function handler(req: Request) {
         })
       }
     } catch (updateErr) {
-      console.error('process-upload: failed to update job status',    String(updateErr))
+      console.error('process-upload: failed to update job status', String(updateErr))
     }
-  
+
     return new Response('ERROR', { status: 500 })
   }
 }
