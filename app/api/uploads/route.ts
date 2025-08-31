@@ -118,7 +118,7 @@ try {
       const payload = { jobId, uploadKey, outputKey, classify: true }
 
       // small handoff delay to allow cross-runtime visibility
-      await new Promise(r => setTimeout(r, 1500))
+      await new Promise(r => setTimeout(r, 3000))
 
       const resp = await fetch(base + BACKGROUND_FN_PATH, {
         method: 'POST',

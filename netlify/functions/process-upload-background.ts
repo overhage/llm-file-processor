@@ -1,103 +1,116 @@
 // netlify/functions/process-upload-background.ts
 
-// Netlify Blobs
+
+
+// ===================== Netlify Blobs =====================
 const UPLOADS_STORE = process.env.UPLOADS_STORE ?? 'uploads'
 const OUTPUTS_STORE = process.env.OUTPUTS_STORE ?? 'outputs'
 let uploads: any
 let outputs: any
+
 async function ensureStores() {
   if (uploads && outputs) return
   console.log('process-upload: ensureStores() starting', {
-    UPLOADS_STORE, OUTPUTS_STORE, node: process.version
+    UPLOADS_STORE, OUTPUTS_STORE, node: process.version,
   })
   const mod: any = await import('@netlify/blobs')
   const getStore = mod.getStore ?? mod.default?.getStore
   if (!getStore) throw new Error('Netlify Blobs getStore not found')
 
-  // Try string signature first, then object signature as fallback
-  try {
-    uploads = getStore({ name: UPLOADS_STORE })
-    outputs = getStore({ name: OUTPUTS_STORE })
-  } catch (e1) {
-    console.log('process-upload: getStore(string) failed, retrying with object signature', String(e1))
-    uploads = getStore({ name: UPLOADS_STORE })
-    outputs = getStore({ name: OUTPUTS_STORE })
-  }
+  // Use the object signature consistently across runtimes/SDK versions
+  uploads = getStore({ name: UPLOADS_STORE })
+  outputs = getStore({ name: OUTPUTS_STORE })
 
-  // Sanity logs
+  // Sanity: try one page
   try {
-    // fetch at least one page to prove the client works
     for await (const page of uploads.list({ limit: 1, paginate: true })) {
       console.log('process-upload: uploads.list sample ok', page?.blobs?.[0]?.key ?? '(none)')
       break
     }
-  } catch (e2) {
-    console.log('process-upload: uploads.list failed', String(e2))
+  } catch (e: any) {
+    console.log('process-upload: uploads.list failed', String(e))
   }
   console.log('process-upload: ensureStores() done')
 }
 
+// ===================== Helpers =====================
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-async function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
-
-// bump retries to ~25 with a modest backoff (~15s total)
-async function readBlobTextWithRetry(store: any, key: string, tries = 25): Promise<string> {
+// Strong, diagnostic reader with signed-URL fallback
+async function readBlobTextWithRetry(store: any, key: string, tries = 40): Promise<string> {
   const userPrefix = key.includes('/') ? key.split('/')[0] + '/' : ''
   let lastErr: any = null
 
+  console.log('process-upload: reading key', { keyRaw: key, keyDebug: JSON.stringify(key) })
+
   for (let i = 0; i < tries; i++) {
     try {
+      // Primary: direct get()
       const res = await store.get(key)
       if (res) {
-        const text = await res.text()
-        if (text && text.length) return text
-        throw new Error(`Blob empty: ${key}`)
+        const txt = await res.text()
+        if (txt?.length) return txt
+        lastErr = new Error(`Blob empty: ${key}`)
       } else {
-        lastErr = new Error(`Blob not found: ${key}`)
+        lastErr = new Error(`Blob not found by get(): ${key}`)
       }
     } catch (e) {
       lastErr = e
     }
 
-    // every 5th attempt, list a few keys under the same user prefix to see visibility
+    // Every 5th attempt, list by prefix and try a signed URL if the key is visible
     if ((i + 1) % 5 === 0 && userPrefix) {
       try {
-        let listed = 0
+        let visible = false
+        let count = 0
         for await (const page of store.list({ prefix: userPrefix, limit: 50, paginate: true })) {
           for (const b of page.blobs) {
-            listed++
-            if (listed <= 5) console.log('process-upload: visible key', b.key)
+            count++
+            if (count <= 5) console.log('process-upload: visible key', b.key)
+            if (b.key === key) visible = true
           }
-          break // first page enough for diagnostics
+          break // first page is enough
         }
-        console.log('process-upload: visible count (first page)', listed)
+        console.log('process-upload: visible count (first page)', count, 'visibleMatch', visible)
+
+        if (visible) {
+          try {
+            const url = await store.getSignedUrl(key, { method: 'GET', expiresIn: 60 })
+            const r = await fetch(url)
+            console.log('process-upload: signed GET status', r.status)
+            if (r.ok) {
+              const txt = await r.text()
+              if (txt?.length) return txt
+              lastErr = new Error(`Signed URL empty body: ${key}`)
+            } else {
+              lastErr = new Error(`Signed URL fetch failed ${r.status}: ${key}`)
+            }
+          } catch (e) {
+            console.log('process-upload: signed URL fetch error', String(e))
+            lastErr = e
+          }
+        }
       } catch (e) {
         console.log('process-upload: list with prefix failed', String(e))
       }
     }
 
-    const delay = 200 + i * 200 // 200ms, 400ms, … (~5s later attempts)
+    const delay = Math.min(5000, 200 + i * 250) // ramp to ~5s
     console.log(`process-upload: blob not ready (attempt ${i + 1}/${tries}) – sleeping ${delay}ms`)
-    await new Promise(r => setTimeout(r, delay))
+    await sleep(delay)
   }
 
   throw lastErr ?? new Error(`Blob not found after ${tries} tries: ${key}`)
 }
 
-
-
-
-// Prisma + OpenAI
-import { PrismaClient } from '@prisma/client'
+// ===================== Prisma + OpenAI =====================
+import { PrismaClient, JobStatus } from '@prisma/client'
 import OpenAI from 'openai'
 
 const prisma = new PrismaClient()
-const db: any = prisma // loosen types at the boundary to avoid schema-name friction
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-// ===== Types =====
-
-
+// ===================== Types =====================
 export type MasterRecord = {
   concept_a: number
   code_a: string
@@ -142,16 +155,15 @@ export type UploadRow = {
   a_before_b: number | string
 }
 
-// ===== Small helpers =====
+// ===================== Small helpers =====================
 const NL = String.fromCharCode(10)
 function num(v: unknown): number { const x = typeof v === 'string' ? Number(v) : (v as number); return Number.isFinite(x) ? x : 0 }
 function s(v: unknown): string { return v == null ? '' : String(v) }
 function round(value: number | null | undefined, digits: number): number { if (value == null || !Number.isFinite(value)) return 0; const p = 10 ** digits; return Math.round((value as number) * p) / p }
 function trimLen(v: unknown, max: number): string { const t = s(v); return t.length > max ? t.slice(0, max) : t }
-
 function wilson95(p: number, n: number) { const z = 1.96; const denom = 1 + (z*z)/n; const center = (p + (z*z)/(2*n)) / denom; const half = (z * Math.sqrt((p*(1-p))/n + (z*z)/(4*n*n))) / denom; return { lo: center - half, hi: center + half } }
 
-// ===== CSV parser (no regex/escapes) =====
+// ===================== CSV parser (simple, quote-aware) =====================
 async function parseCsv(text: string): Promise<UploadRow[]> {
   const COMMA=44, QUOTE=34, CR=13, LF=10
   const rows: string[][] = []
@@ -196,7 +208,7 @@ async function parseCsv(text: string): Promise<UploadRow[]> {
   return out
 }
 
-// ===== Stats & transforms =====
+// ===================== Stats & transforms =====================
 function computeStats(row: MasterRecord): MasterRecord {
   const cooc_obs = num(row.cooc_obs), nA = num(row.nA), nB = num(row.nB), total = num(row.total_persons)
   const a_before_b = num(row.a_before_b), b_before_a = Math.max(0, num(row.cooc_event_count) - a_before_b)
@@ -209,7 +221,7 @@ function computeStats(row: MasterRecord): MasterRecord {
     ...row,
     expected_obs: round(expected,2), lift: round(lift,4), z_score: round(z,4), directionality_ratio: round(dir,4),
     lift_lower_95: lift>0 && cooc_obs>0 && expected>0 ? round(Math.exp(Math.log(lift) - 1.96*Math.sqrt(1/cooc_obs + 1/expected)),4) : 0,
-    lift_upper_95: lift>0 && cooc_obs>0 && expected>0 ? round(Math.exp(Math.log(lift) + 1.96*Math.sqrt(1/cooc_obs + 1/expected)),4) : 0,
+    lift_upper_95: lift>0 && cooc_obs>0 && expected>0 ? round(Math.exp(Math.log(lift) + 1.96*Math.sqrt(1/expected + 1/cooc_obs)),4) : 0,
     RATIONALE: row.RATIONALE ?? `Wilson95 A→B proportion=${round(dir,4)} N=${dirDen} [${round(lo,4)}, ${round(hi,4)}]`,
   }
 }
@@ -228,7 +240,7 @@ function masterKeySnake(m: MasterRecord) {
   return { concept_a: m.concept_a, concept_b: m.concept_b, code_a: trimLen(m.code_a,64), code_b: trimLen(m.code_b,64), system_a: trimLen(m.system_a,32), system_b: trimLen(m.system_b,32) }
 }
 
-// ===== LLM classifier (optional) =====
+// ===================== LLM classifier =====================
 const OPENAI_MODEL = (process.env.OPENAI_MODEL ?? 'gpt-4.1') as any
 async function classifyRelationship(m: MasterRecord): Promise<Pick<MasterRecord,'REL_TYPE'|'REL_TYPE_T'|'RATIONALE'>> {
   if (!process.env.OPENAI_API_KEY) {
@@ -251,11 +263,11 @@ async function classifyRelationship(m: MasterRecord): Promise<Pick<MasterRecord,
   }
 }
 
-// ===== Prisma writes (snake_case schema) =====
+// ===================== Prisma writes (snake_case schema) =====================
 async function incrementSourceCount(m: MasterRecord) {
   const where = masterKeySnake(m)
-  const res = await db.masterRecord.updateMany({ where, data: { source_count: { increment: 1 } } })
-  if (res.count === 0) { await db.masterRecord.create({ data: { ...where, source_count: 1 } }) }
+  const res = await (prisma as any).masterRecord.updateMany({ where, data: { source_count: { increment: 1 } } })
+  if (res.count === 0) { await (prisma as any).masterRecord.create({ data: { ...where, source_count: 1 } }) }
 }
 
 async function upsertMaster(m: MasterRecord) {
@@ -277,13 +289,13 @@ async function upsertMaster(m: MasterRecord) {
     rel_type_t: m.REL_TYPE_T,
     rationale: m.RATIONALE,
   }
-  const res = await db.masterRecord.updateMany({ where, data })
-  if (res.count === 0) { await db.masterRecord.create({ data: { ...where, ...data, source_count: 1 } }) }
+  const res = await (prisma as any).masterRecord.updateMany({ where, data })
+  if (res.count === 0) { await (prisma as any).masterRecord.create({ data: { ...where, ...data, source_count: 1 } }) }
 }
 
-async function finalizeMasterSnapshot() { /* no-op */ }
+async function finalizeMasterSnapshot() { /* no-op for now */ }
 
-// ===== Netlify Blobs helpers =====
+// ===================== Netlify Blobs thin wrappers =====================
 async function readBlobText(store: any, key: string): Promise<string> {
   const res = await store.get(key)
   if (!res) throw new Error(`Blob not found: ${key}`)
@@ -298,26 +310,48 @@ async function writeBlobText(store: any, key: string, text: string): Promise<voi
   })
 }
 
-
-// ===== Handler =====
+// ===================== Handler =====================
 export default async function handler(req: Request) {
   console.log('process-upload: invoked')
+
+  // Hoisted so the catch block can mark the job failed
+  let jobId: string | undefined
+  let uploadKey: string | undefined
+  let outputKey: string | undefined
+  let classify: boolean = true
+
   try {
-    if (req.method !== 'POST') return new Response('Method Not Allowed', { status: 405 })
+    if (req.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405 })
+    }
     console.log('process-upload: req.method was POST')
-    const { jobId, uploadKey, outputKey, classify = true } = await req.json()
+
+    // Parse ONCE, then assign to the hoisted vars
+    const body = await req.json()
+    jobId = body?.jobId
+    uploadKey = body?.uploadKey
+    outputKey = body?.outputKey
+    classify = body?.classify ?? true
+
     if (!uploadKey || !outputKey) throw new Error('uploadKey and outputKey required')
     console.log('process-upload: uploadkey and outputKey present')
 
-    // job mark running (best-effort)
-    try { await db.job.update({ where: { id: jobId }, data: { status: 'running', started_at: new Date() } }) } catch {}
+    // Mark job running (best-effort)
+    try {
+      if (jobId) {
+        await prisma.job.update({
+          where: { id: jobId },
+          data: { status: JobStatus.running, finishedAt: new Date() },
+        })
+      }
+    } catch {}
     console.log('process-upload: marked job as running')
 
     await ensureStores()
     console.log('process-upload: stores ensured', { uploadKey })
+
     const csv = await readBlobTextWithRetry(uploads, uploadKey)
     console.log('process-upload: blob read (len)', csv.length)
-
 
     const rows = await parseCsv(csv)
     console.log('process-upload: csv parsed')
@@ -326,12 +360,9 @@ export default async function handler(req: Request) {
     let calls = 0
 
     for (const r of rows) {
-      console.log('process-upload: processing row')
       const m = mergeCountsAndCompute(r)
-      console.log('process-upload: merge counts and compute complete')
       if (classify && calls < Number(process.env.LLM_MAX_CALLS_PER_JOB ?? '50')) {
         const rel = await classifyRelationship(m)
-        console.log('process-upload: classify complete')
         Object.assign(m, rel)
         calls++
       }
@@ -355,17 +386,42 @@ export default async function handler(req: Request) {
       lines.push([
         m.concept_a, m.code_a, m.system_a, m.concept_b, m.code_b, m.system_b,
         m.cooc_obs, m.nA, m.nB, m.total_persons, m.cooc_event_count, m.a_before_b,
-        round(m.expected_obs,2), round(m.lift,4), round(m.lift_lower_95,4), round(m.lift_upper_95,4), round(m.z_score,4), round(m.directionality_ratio,4),
+        round(m.expected_obs,2), round(m.lift,4), round(m.lift_lower_95,4), round(m.lift_upper_95,4),
+        round(m.z_score,4), round(m.directionality_ratio,4),
         trimLen(m.REL_TYPE,32), trimLen(m.REL_TYPE_T,64), trimLen(m.RATIONALE,500)
       ].join(','))
     }
     await writeBlobText(outputs, outputKey, lines.join(NL))
 
-    try { await db.job.update({ where: { id: jobId }, data: { status: 'succeeded', finished_at: new Date() } }) } catch {}
+    // Success stamp (best-effort)
+    try {
+      if (jobId) {
+        await prisma.job.update({
+          where: { id: jobId },
+          data: { status: JobStatus.completed, finishedAt: new Date() },
+        })
+      }
+    } catch {}
 
     return new Response(JSON.stringify({ ok: true, records: out.length }), { status: 200 })
-  } catch (err: any) {
-    try { const body = await req.json(); if (body?.jobId) { await db.job.update({ where: { id: body.jobId }, data: { status: 'failed', error: String(err?.message ?? err) } }) } } catch {}
+
+ } catch (err: any) {
+  const failureMsg = String(err?.message ?? err)
+  console.error('process-upload ERROR', { failureMsg, jobId, uploadKey })
+
+
+    // Best-effort failure stamp so the UI shows the cause
+    try {
+      if (jobId) {
+        await prisma.job.update({
+          where: { id: jobId },
+          data: { status: JobStatus.failed, error: failureMsg, finishedAt: new Date() },
+        })
+      }
+    } catch (updateErr) {
+      console.error('process-upload: failed to update job status',    String(updateErr))
+    }
+  
     return new Response('ERROR', { status: 500 })
   }
 }
