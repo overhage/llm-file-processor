@@ -40,14 +40,15 @@ async function ensureStores() {
 
 async function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
-async function readBlobTextWithRetry(store: any, key: string, tries = 8): Promise<string> {
+// bump retries to ~25 with a modest backoff (~15s total)
+async function readBlobTextWithRetry(store: any, key: string, tries = 25): Promise<string> {
   let lastErr: any = null
   for (let i = 0; i < tries; i++) {
     try {
       const res = await store.get(key)
       if (res) {
         const text = await res.text()
-        if (text && text.length) return text
+        if (text?.length) return text
         throw new Error(`Blob empty: ${key}`)
       } else {
         lastErr = new Error(`Blob not found: ${key}`)
@@ -55,12 +56,13 @@ async function readBlobTextWithRetry(store: any, key: string, tries = 8): Promis
     } catch (e) {
       lastErr = e
     }
-    const delay = 150 * (i + 1) // 150ms, 300ms, … ~1.2s total
+    const delay = 200 + i * 200 // 200ms, 400ms, … ~5s on later attempts
     console.log(`process-upload: blob not ready (attempt ${i + 1}/${tries}) – sleeping ${delay}ms`)
-    await sleep(delay)
+    await new Promise(r => setTimeout(r, delay))
   }
   throw lastErr ?? new Error(`Blob not found after ${tries} tries: ${key}`)
 }
+
 
 
 // Prisma + OpenAI
