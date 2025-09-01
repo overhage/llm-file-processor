@@ -42,9 +42,6 @@ export default async function JobsPage() {
 
   return (
     <>
-      {/* Site header & navigation (client component, no props) */}
-      <AppHeader />
-
       <main className="max-w-5xl mx-auto px-4 py-6">
         <div className="mb-6">
           <h1 className="text-2xl font-semibold">Jobs</h1>
@@ -85,9 +82,9 @@ export default async function JobsPage() {
                 <td>
                   {j.status === 'completed' ? (
                     <a
-                      href={`/api/downloads?jobId=${encodeURIComponent(j.id)}`}
+                      href={`/api/downloads/${j.id}`}
                       className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium border border-neutral-300 hover:bg-neutral-50"
-                      download
+                      download={`${(j.upload?.originalName || 'job').replace(/\.[^./\\]+$/, '')}-results.csv`}
                     >
                       Download CSV
                     </a>
