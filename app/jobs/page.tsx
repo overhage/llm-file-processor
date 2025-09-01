@@ -82,12 +82,14 @@ export default async function JobsPage() {
                 <td>
                   {j.status === 'completed' ? (
                     <a
-                      href={`/api/downloads/${j.id}`}
-                      className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium border border-neutral-300 hover:bg-neutral-50"
-                      download={`${(j.upload?.originalName || 'job').replace(/\.[^./\\]+$/, '')}-results.csv`}
-                    >
-                      Download CSV
-                    </a>
+  href={`/.netlify/functions/download?jobId=${encodeURIComponent(j.id)}`}
+  className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium border border-neutral-300 hover:bg-neutral-50"
+  // optional filename hint; safe to keep or remove
+  download={`${(j.upload?.originalName || 'job').replace(/\.[^./\\]+$/, '')}-results.csv`}
+>
+  Download CSV
+</a>
+
                   ) : (
                     <span className="text-neutral-500">—</span>
                   )}
