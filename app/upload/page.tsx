@@ -141,8 +141,6 @@ export default function UploadPage() {
           <button type="submit" disabled={busy}>
             {busy ? 'Uploading…' : 'Upload'}
           </button>
-          <a href="/jobs" style={{ marginLeft: 12 }}>Back to Jobs</a>
-          <a href="/api/auth/signout" style={{ marginLeft: 12 }}>Log out</a>
         </div>
       </form>
 
