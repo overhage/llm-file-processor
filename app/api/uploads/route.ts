@@ -1,4 +1,4 @@
-// app/api/uploads/route.ts
+// app/api/uploads/route.ts — offload blob save to Netlify Function
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -7,44 +7,41 @@ export const revalidate = 0
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { getServerSession } from 'next-auth'
+import type { Session } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import crypto from 'node:crypto'
 
-// Keep store name consistent across writer/reader
-const UPLOADS_STORE = process.env.UPLOADS_STORE ?? 'uploads'
-// the invoke URL is /.netlify/functions/process-upload-background
-const BACKGROUND_FN_PATH = '/.netlify/functions/process-upload-background'
-
-// ---- robust dynamic import for Netlify Blobs (ESM safe) ----
-let _getStoreCached: any
-async function loadGetStore() {
-  if (_getStoreCached) return _getStoreCached
-  const mod: any = await import('@netlify/blobs')
-  const fn = mod.getStore ?? mod.default?.getStore
-  if (!fn) throw new Error('Netlify Blobs getStore not found')
-  _getStoreCached = fn
-  return fn
+export type AppSession = Session & {
+  user: NonNullable<Session['user']> & { id: string }
 }
+
+const BACKGROUND_FN_PATH = '/.netlify/functions/process-upload-background'
+const STORE_UPLOAD_FN_PATH = '/.netlify/functions/store-upload'
+const UPLOADS_STORE = process.env.UPLOADS_STORE ?? 'uploads'
 
 export async function POST(req: Request) {
   try {
-    // --- auth ---
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.email) return new Response('Unauthorized', { status: 401 })
+    // ---- Auth ----
+    const session = (await getServerSession(authOptions as any)) as AppSession | null
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 })
+    }
+    const userId = session.user.id
 
-    const me = await prisma.user.findUnique({
-      where: { email: session.user.email },
-      select: { id: true },
-    })
-    if (!me) return new Response('Unauthorized', { status: 401 })
-    const userId = me.id
+    // ---- Read form ----
+    const formData = await req.formData()
+    const file = formData.get('file') as File | null
 
-    // --- read form ---
-    const form = await req.formData()
-    const file = form.get('file')
-    if (!(file instanceof File)) return new Response('No file provided', { status: 400 })
+    if (!file) {
+      throw new Error('No file uploaded')
+    }
 
-    const originalName = file.name || 'upload.csv'
+    // ---- Basic validation (CSV) ----
+    const fileName = (file as any).name || 'upload.csv'
+    if (!/\.csv$/i.test(fileName)) {
+      throw new Error('Please upload a CSV file')
+    }
+
     const jobId = crypto.randomUUID()
 
     // choose blob keys (worker expects these names)
@@ -53,102 +50,81 @@ export async function POST(req: Request) {
 
     // --- create Upload row ---
     const upload = await prisma.upload.create({
-      data: { userId, blobKey: uploadKey, originalName },
+      data: { userId, blobKey: uploadKey, originalName: fileName },
       select: { id: true },
     })
 
-// --- save file to Netlify Blobs (robust) ---
-try {
-  const getStore = await loadGetStore()
-
-  // Use a single, consistent signature everywhere
-  const uploadStore = getStore({ name: UPLOADS_STORE })
-
-  // Convert File -> Buffer (avoids streaming quirks)
-  const buf = Buffer.from(await (file as File).arrayBuffer())
-
-  await uploadStore.set(uploadKey, buf, {
-    access: 'private',
-    contentType: 'text/csv; charset=utf-8',
-    metadata: { originalName, userId, jobId },
-  })
-
-  // Verify write immediately so we fail fast if not visible
-  const verify = await uploadStore.get(uploadKey)
-  const exists = !!verify
-  console.log('upload: saved', { uploadKey, exists, UPLOADS_STORE })
-  if (!exists) throw new Error(`Upload blob not visible after set: ${uploadKey}`)
-} catch (e) {
-  console.error('upload: blob write failed', e)
-  throw e
-}
-
-    // --- create Job (queued) ---
-    await prisma.job.create({
+    // --- create Job row ---
+    const job = await prisma.job.create({
       data: {
         id: jobId,
         userId,
         uploadId: upload.id,
         status: 'queued',
-        rowsTotal: 0,
-        rowsProcessed: 0,
-        // If you track output location in DB, set it here (adjust field name):
-        // output_blob_key: outputKey,
+        outputBlobKey: outputKey,
       },
+      select: { id: true },
     })
 
-    // --- kick background worker (best-effort) ---
-    try {
-      const proto = req.headers.get('x-forwarded-proto') ?? 'https'
-      const host = req.headers.get('x-forwarded-host')
-      const base =
-        (host ? `${proto}://${host}` : '') ||
-        process.env.URL ||
-        process.env.DEPLOY_PRIME_URL ||
-        ''
+    // ---- Store in Netlify Blobs via Netlify Function (for env access) ----
+    // Send the CSV as text so the function receives a UTF-8 body (no base64 needed)
+    const bodyText = await file.text()
+    const storeUrl = new URL(
+      `${STORE_UPLOAD_FN_PATH}?key=${encodeURIComponent(uploadKey)}`,
+      req.url
+    ).toString()
 
-      console.log('upload: invoking worker', {
-        base,
-        DEPLOY_CONTEXT: process.env.DEPLOY_CONTEXT,
-        jobId,
-        uploadKey,
-        outputKey,
-      })
+    const storeRes = await fetch(storeUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'text/csv',
+        'x-original-name': fileName,
+        'x-user-id': userId,
+        'x-uploads-store': UPLOADS_STORE,
+      },
+      body: bodyText,
+    })
 
-      const payload = { jobId, uploadKey, outputKey, classify: true }
-
-      // small handoff delay to allow cross-runtime visibility
-      await new Promise(r => setTimeout(r, 3000))
-
-      const resp = await fetch(base + BACKGROUND_FN_PATH, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      const text = await resp.text().catch(() => '')
-      console.log('process-upload trigger', resp.status, text)
-    } catch (e) {
-      console.error('process-upload trigger failed', e)
+    if (!storeRes.ok) {
+      const txt = await storeRes.text()
+      throw new Error(`Blob store failed: ${storeRes.status} ${txt}`)
     }
 
-    // --- respond: JSON or redirect ---
+    // ---- Kick off background processing ----
+    const invokeUrl = new URL(BACKGROUND_FN_PATH, req.url).toString()
+    await fetch(invokeUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        jobId: job.id,
+        uploadId: upload.id,
+        uploadKey,
+        outputKey,
+        originalName: fileName,
+      }),
+    })
+
+    // ---- Respond (redirect HTML, JSON otherwise) ----
     const wantsJson = (req.headers.get('accept') || '').includes('application/json')
-    if (wantsJson) return Response.json({ ok: true, jobId, outputKey })
+    if (wantsJson) {
+      return NextResponse.json({ ok: true, jobId: job.id, uploadId: upload.id })
+    }
 
     const url = new URL(req.url)
-    const redirectTo = url.searchParams.get('redirect') || '/jobs'
+    const redirectTo = `/jobs?created=1&job=${encodeURIComponent(job.id)}`
     return NextResponse.redirect(new URL(redirectTo, url), 303)
   } catch (err: any) {
     console.error('Upload failed', err)
 
     const wantsJson = (req.headers.get('accept') || '').includes('application/json')
-    if (!wantsJson) {
-      const url = new URL(req.url)
-      const back = new URL('/upload', url)
-      back.searchParams.set('error', String(err?.message ?? 'Upload failed'))
-      return NextResponse.redirect(back, 303)
+    if (wantsJson) {
+      return new Response(String(err?.message ?? err), { status: 500 })
     }
-    return new Response(String(err?.message ?? err), { status: 500 })
+
+    const url = new URL(req.url)
+    const back = new URL('/upload', url)
+    back.searchParams.set('error', String(err?.message ?? 'Upload failed'))
+    return NextResponse.redirect(back, 303)
   }
 }
