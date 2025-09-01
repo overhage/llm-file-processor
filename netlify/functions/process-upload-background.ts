@@ -75,6 +75,7 @@ async function readBlobTextWithRetry(
 }
 
 // ===================== Prisma + OpenAI =====================
+import { Context } from '@netlify/functions'
 import { PrismaClient, JobStatus } from '@prisma/client'
 import OpenAI from 'openai'
 
@@ -110,9 +111,9 @@ export type MasterRecord = {
 }
 
 export type UploadRow = {
-  concept_a: string | string
+  concept_a: string
   code_a: string
-  concept_b: string | string
+  concept_b: string
   code_b: string
   system_a: string
   system_b: string
@@ -282,30 +283,32 @@ async function writeBlobText(store: any, key: string, text: string): Promise<voi
 }
 
 // ===================== Handler =====================
-export default async function handler(req: Request) {
+export const handler = async (event: any, context: Context): Promise<void> => {
   console.log('process-upload: invoked')
 
-  // Hoisted so the catch block can mark the job failed
+  // Hoisted so the catch/finally blocks can reference them
   let jobId: string | undefined
   let uploadKey: string | undefined
   let outputKey: string | undefined
-  let classify: boolean = true
+  let classify = true
 
   try {
-    if (req.method !== 'POST') {
-      return new Response('Method Not Allowed', { status: 405 })
+    const method = event?.httpMethod
+    if (method !== 'POST') {
+      console.error('process-upload: Method not allowed', method)
+      return
     }
-    console.log('process-upload: req.method was POST')
 
-    // Parse ONCE, then assign to the hoisted vars
-    const body = await req.json()
+    // Parse the JSON body (string in Netlify Node runtime)
+    const body = JSON.parse(event.body || '{}')
     jobId = body?.jobId
     uploadKey = body?.uploadKey
     outputKey = body?.outputKey
     classify = body?.classify ?? true
 
-    if (!uploadKey || !outputKey) throw new Error('uploadKey and outputKey required')
-    console.log('process-upload: uploadkey and outputKey present')
+    if (!uploadKey || !outputKey) {
+      throw new Error('uploadKey and outputKey required')
+    }
 
     // Mark job running (best-effort)
     try {
@@ -316,16 +319,11 @@ export default async function handler(req: Request) {
         })
       }
     } catch {}
-    console.log('process-upload: marked job as running')
 
     await ensureStores()
-    console.log('process-upload: stores ensured', { uploadKey })
 
-    const csv = await readBlobTextWithRetry(uploads, uploadKey)
-    console.log('process-upload: blob read (len)', csv.length)
-
+    const csv = await readBlobTextWithRetry(uploads, uploadKey!)
     const rows = await parseCsv(csv)
-    console.log('process-upload: csv parsed')
 
     const out: MasterRecord[] = []
     let calls = 0
@@ -343,7 +341,6 @@ export default async function handler(req: Request) {
     }
 
     await finalizeMasterSnapshot()
-    console.log('process-upload: Master snapshot finalized')
 
     // Output CSV
     const header = [
@@ -362,7 +359,7 @@ export default async function handler(req: Request) {
         trimLen(m.REL_TYPE,32), trimLen(m.REL_TYPE_T,64), trimLen(m.RATIONALE,500)
       ].join(','))
     }
-    await writeBlobText(outputs, outputKey, lines.join(NL))
+    await writeBlobText(outputs, outputKey!, lines.join(NL))
 
     // Persist output location and row counts for the download route/UI
     try {
@@ -373,29 +370,16 @@ export default async function handler(req: Request) {
             outputBlobKey: outputKey,
             rowsTotal: rows.length,
             rowsProcessed: out.length,
+            status: JobStatus.completed,
+            finishedAt: new Date(),
           },
-        })
-      }
-    } catch (e) {
-      console.warn('process-upload: failed to persist outputBlobKey/rows', String(e))
-    }
-
-
-    // Success stamp (best-effort)
-    try {
-      if (jobId) {
-        await prisma.job.update({
-          where: { id: jobId },
-          data: { status: JobStatus.completed, finishedAt: new Date() },
         })
       }
     } catch {}
 
-    return new Response(JSON.stringify({ ok: true, records: out.length }), { status: 200 })
-
-  } catch (err) {
-    const failureMsg = `process-upload failed: ${err instanceof Error ? err.message : String(err)}`
-    console.error('process-upload:', failureMsg)
+  } catch (err: any) {
+    const failureMsg = `process-upload failed: ${err?.message || String(err)}`
+    console.error(failureMsg)
 
     // Best-effort failure stamp so the UI shows the cause
     try {
@@ -409,6 +393,8 @@ export default async function handler(req: Request) {
       console.error('process-upload: failed to update job status', String(updateErr))
     }
 
-    return new Response('ERROR', { status: 500 })
+  } finally {
+    // Always disconnect to avoid open handles
+    await prisma.$disconnect().catch(() => {})
   }
 }
