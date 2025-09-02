@@ -1,5 +1,7 @@
-// netlify/functions/store-upload.ts — Buffer→ArrayBuffer fix (env-aware)
-// Keeps this as a Netlify Function (uses Netlify env); avoids '@netlify/functions' types.
+// netlify/functions/store-upload.ts — compat with JSON+base64 or raw body
+// - Accepts JSON { filename, contentType, data (base64), key? } from Next route
+// - Also accepts legacy raw body with query/header-provided key
+// - Uses Netlify Blobs with env-aware configuration
 
 import { getStore } from '@netlify/blobs'
 
@@ -17,12 +19,11 @@ function getEnvAwareStore(name = DEFAULT_STORE) {
     process.env.BLOBS_TOKEN ||
     undefined
 
-  // If siteID/token provided (e.g., local dev), pass them explicitly
-  if (siteID && token) {
-    return getStore({ name, siteID, token })
-  }
-  // Otherwise rely on Netlify environment
-  return getStore(name)
+  return siteID && token ? getStore({ name, siteID, token }) : getStore(name)
+}
+
+function sanitizeFilename(name: string) {
+  return (name || 'upload.csv').replace(/[^A-Za-z0-9._-]/g, '_')
 }
 
 export const handler = async (event: any) => {
@@ -31,38 +32,62 @@ export const handler = async (event: any) => {
       return { statusCode: 405, body: 'Method Not Allowed' }
     }
 
-    const key = event.queryStringParameters?.key || event.headers?.['x-key']
+    const headers = event.headers || {}
+    const contentType = String(headers['content-type'] || headers['Content-Type'] || '')
+    const storeName = String(headers['x-uploads-store'] || DEFAULT_STORE)
+    const userId = String(headers['x-user-id'] || 'anonymous')
+
+    const store = getEnvAwareStore(storeName)
+
+    // Path A: JSON payload from Next route { filename, contentType, data, key? }
+    if (contentType.startsWith('application/json')) {
+      const body = JSON.parse(event.body || '{}')
+      const filename = sanitizeFilename(String(body.filename || 'upload.csv'))
+      const mime = String(body.contentType || 'text/csv')
+      let key = String(body.key || '')
+      if (!key) key = `uploads/${Date.now()}_${filename}`
+
+      const base64 = String(body.data || '')
+      if (!base64) {
+        return { statusCode: 400, body: 'Missing data (base64) in JSON body' }
+      }
+      const buf = Buffer.from(base64, 'base64')
+      const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+
+      await store.set(key, ab, {
+        metadata: { userId, originalName: filename, length: String(buf.byteLength), contentType: mime },
+      })
+
+      return {
+        statusCode: 200,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ok: true, key, size: buf.byteLength, contentType: mime }),
+      }
+    }
+
+    // Path B: legacy/raw body with explicit key (query or header)
+    const key = event.queryStringParameters?.key || headers['x-key']
     if (!key || typeof key !== 'string') {
       return { statusCode: 400, body: 'Missing blob key' }
     }
 
-    const originalName = String(event.headers?.['x-original-name'] || 'upload.csv')
-    const userId = String(event.headers?.['x-user-id'] || 'anonymous')
-    const contentType = String(event.headers?.['content-type'] || 'text/plain')
-    const storeName = String(event.headers?.['x-uploads-store'] || DEFAULT_STORE)
-
-    // Netlify passes request body as string; may be base64-encoded.
+    // Netlify may base64-encode body depending on content. Support both.
     const raw = event.body || ''
-    const buf = event.isBase64Encoded ? Buffer.from(raw, 'base64') : Buffer.from(raw, 'utf8')
-
-    // Convert Buffer -> exact ArrayBuffer slice (BlobInput without DOM Blob)
+    const isB64 = !!event.isBase64Encoded || /^[-A-Za-z0-9+/=]+$/.test(raw)
+    const buf = Buffer.from(raw, isB64 ? 'base64' : 'utf8')
     const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
 
-    const store = getEnvAwareStore(storeName)
+    const originalName = sanitizeFilename(String(headers['x-original-name'] || 'upload.csv'))
+    const mime = String(headers['content-type'] || 'text/plain')
+
     await store.set(key, ab, {
-      // SetOptions has no contentType field; keep MIME in metadata if you care downstream
-      metadata: {
-        userId,
-        originalName,
-        length: String(buf.byteLength),
-        contentType,
-      },
+      metadata: { userId, originalName, length: String(buf.byteLength), contentType: mime },
     })
 
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ok: true, key }),
+      body: JSON.stringify({ ok: true, key, size: buf.byteLength, contentType: mime }),
     }
   } catch (err: any) {
     return {

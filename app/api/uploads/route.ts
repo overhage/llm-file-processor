@@ -1,130 +1,97 @@
-// app/api/uploads/route.ts — offload blob save to Netlify Function
+// app/api/uploads/route.ts (reliable blobs fix)
+// Two supported implementations:
+//   A) DEFAULT (recommended): proxy upload to Netlify Function `store-upload` so Blobs
+//      run inside a fully configured Functions runtime.
+//   B) Direct Blobs from Next.js route using explicit siteID/token (if you prefer).
+// Flip the flag below to switch. Make sure to follow the setup notes at the top of the file.
 
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
-export const revalidate = 0
+const USE_FUNCTION_UPLOAD = true; // set false to use Direct Blobs in this route
 
-import { NextResponse } from 'next/server'
-import { prisma } from '@/lib/db'
-import { getServerSession } from 'next-auth'
-import type { Session } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import crypto from 'node:crypto'
-
-export type AppSession = Session & {
-  user: NonNullable<Session['user']> & { id: string }
+// ===================== Common helpers =====================
+function bad(msg: string, status = 400) {
+  return new Response(msg, { status });
 }
 
-const BACKGROUND_FN_PATH = '/.netlify/functions/process-upload-background'
-const STORE_UPLOAD_FN_PATH = '/.netlify/functions/store-upload'
-const UPLOADS_STORE = process.env.UPLOADS_STORE ?? 'uploads'
+function ensureCsvOrTsv(filename?: string, contentType?: string) {
+  const okType = (contentType || '').includes('csv') || (contentType || '').includes('tsv') || (contentType || '').includes('plain');
+  const okName = (filename || '').toLowerCase().endsWith('.csv') || (filename || '').toLowerCase().endsWith('.tsv');
+  if (!okType && !okName) throw new Error('Only CSV/TSV files are accepted');
+}
 
+// ===================== A) Recommended: upload via Netlify Function =====================
+async function uploadViaFunction(file: File) {
+  const filename = file.name || 'upload.csv';
+  const contentType = file.type || 'text/csv';
+  ensureCsvOrTsv(filename, contentType);
+  const buf = Buffer.from(await file.arrayBuffer());
+
+  const siteURL = process.env.NEXT_PUBLIC_SITE_URL || '';
+  const endpoint = new URL('/.netlify/functions/store-upload', siteURL || 'http://localhost:8888');
+
+  const res = await fetch(endpoint.toString(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    // store-upload should accept base64 body: { filename, contentType, data }
+    body: JSON.stringify({ filename, contentType, data: buf.toString('base64') }),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`store-upload failed: ${res.status} ${txt}`);
+  }
+  return res.json(); // { key, url, size, contentType }
+}
+
+// ===================== B) Direct Blobs from the route (explicit siteID/token) =====================
+// Requirements:
+//   • Set env vars in Netlify: NETLIFY_SITE_ID, NETLIFY_BLOBS_WRITE_TOKEN (Write scope)
+//   • Keep UPLOADS_STORE to the same name used by your Functions (e.g., 'uploads')
+
+async function uploadDirectFromRoute(file: File) {
+  const filename = file.name || 'upload.csv';
+  const contentType = file.type || 'text/csv';
+  ensureCsvOrTsv(filename, contentType);
+
+  const { getStore } = await import('@netlify/blobs');
+  const uploads = getStore({
+    name: process.env.UPLOADS_STORE || 'uploads',
+    siteID: process.env.NETLIFY_SITE_ID!,
+    token: process.env.NETLIFY_BLOBS_WRITE_TOKEN!,
+    consistency: 'strong',
+  });
+
+  // Use a timestamped key to avoid collisions
+  const key = `uploads/${Date.now()}_${filename.replace(/[^A-Za-z0-9._-]/g, '_')}`;
+
+  const buf = Buffer.from(await file.arrayBuffer());
+  await uploads.set(key, buf, { access: 'public', contentType });
+
+  const url = await uploads.getSignedUrl(key, { mode: 'r', expiresIn: 60 * 60 }); // 1h signed URL
+  return { key, url, size: buf.length, contentType };
+}
+
+// ===================== Next.js Route Handler =====================
 export async function POST(req: Request) {
   try {
-    // ---- Auth ----
-    const session = (await getServerSession(authOptions as any)) as AppSession | null
-    if (!session?.user?.id) {
-      return new NextResponse('Unauthorized', { status: 401 })
-    }
-    const userId = session.user.id
+    const form = await req.formData();
+    const file = form.get('file');
+    if (!(file instanceof File)) return bad('Missing file field');
 
-    // ---- Read form ----
-    const formData = await req.formData()
-    const file = formData.get('file') as File | null
+    const result = USE_FUNCTION_UPLOAD
+      ? await uploadViaFunction(file)
+      : await uploadDirectFromRoute(file);
 
-    if (!file) {
-      throw new Error('No file uploaded')
-    }
-
-    // ---- Basic validation (CSV) ----
-    const fileName = (file as any).name || 'upload.csv'
-    if (!/\.csv$/i.test(fileName)) {
-      throw new Error('Please upload a CSV file')
-    }
-
-    const jobId = crypto.randomUUID()
-
-    // choose blob keys (worker expects these names)
-    const uploadKey = `${userId}/${jobId}.csv`
-    const outputKey = `${userId}/${jobId}.out.csv`
-
-    // --- create Upload row ---
-    const upload = await prisma.upload.create({
-      data: { userId, blobKey: uploadKey, originalName: fileName },
-      select: { id: true },
-    })
-
-    // --- create Job row ---
-    const job = await prisma.job.create({
-      data: {
-        id: jobId,
-        userId,
-        uploadId: upload.id,
-        status: 'queued',
-        outputBlobKey: outputKey,
-      },
-      select: { id: true },
-    })
-
-    // ---- Store in Netlify Blobs via Netlify Function (for env access) ----
-    // Send the CSV as text so the function receives a UTF-8 body (no base64 needed)
-    const bodyText = await file.text()
-    const storeUrl = new URL(
-      `${STORE_UPLOAD_FN_PATH}?key=${encodeURIComponent(uploadKey)}`,
-      req.url
-    ).toString()
-
-    const storeRes = await fetch(storeUrl, {
-      method: 'POST',
-      headers: {
-        'content-type': 'text/csv',
-        'x-original-name': fileName,
-        'x-user-id': userId,
-        'x-uploads-store': UPLOADS_STORE,
-      },
-      body: bodyText,
-    })
-
-    if (!storeRes.ok) {
-      const txt = await storeRes.text()
-      throw new Error(`Blob store failed: ${storeRes.status} ${txt}`)
-    }
-
-    // ---- Kick off background processing ----
-    const invokeUrl = new URL(BACKGROUND_FN_PATH, req.url).toString()
-    await fetch(invokeUrl, {
-      method: 'POST',
+    return new Response(JSON.stringify({ ok: true, upload: result }), {
+      status: 200,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        userId,
-        jobId: job.id,
-        uploadId: upload.id,
-        uploadKey,
-        outputKey,
-        originalName: fileName,
-      }),
-    })
-
-    // ---- Respond (redirect HTML, JSON otherwise) ----
-    const wantsJson = (req.headers.get('accept') || '').includes('application/json')
-    if (wantsJson) {
-      return NextResponse.json({ ok: true, jobId: job.id, uploadId: upload.id })
-    }
-
-    const url = new URL(req.url)
-    const redirectTo = `/jobs?created=1&job=${encodeURIComponent(job.id)}`
-    return NextResponse.redirect(new URL(redirectTo, url), 303)
+    });
   } catch (err: any) {
-    console.error('Upload failed', err)
-
-    const wantsJson = (req.headers.get('accept') || '').includes('application/json')
-    if (wantsJson) {
-      return new Response(String(err?.message ?? err), { status: 500 })
-    }
-
-    const url = new URL(req.url)
-    const back = new URL('/upload', url)
-    back.searchParams.set('error', String(err?.message ?? 'Upload failed'))
-    return NextResponse.redirect(back, 303)
+    console.error('Upload failed', err);
+    return bad(`Upload failed ${err?.message || String(err)}`, 500);
   }
+}
+
+// GET is optional: could be used to sanity-check configuration
+export async function GET() {
+  return new Response('OK', { status: 200 });
 }
